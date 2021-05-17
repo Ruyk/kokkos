@@ -28,9 +28,6 @@ KOKKOS_DEPRECATED_LIST(OPTIONS ENABLE)
 
 # Set the Default for Desul Atomics usage. SYCL is not supported yet.
 set(_DESUL_ATOMICS_DEFAULT ON)
-if(KOKKOS_ENABLE_SYCL)
-   set(_DESUL_ATOMICS_DEFAULT OFF)
-endif()
 
 KOKKOS_ENABLE_OPTION(CUDA_RELOCATABLE_DEVICE_CODE  OFF "Whether to enable relocatable device code (RDC) for CUDA")
 KOKKOS_ENABLE_OPTION(CUDA_UVM             OFF "Whether to use unified memory (UM) for CUDA by default")
