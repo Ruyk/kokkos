@@ -160,47 +160,48 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
     const auto& m_tile_end = m_policy.m_tile_end;
 
     if constexpr (Policy::rank == 2) {
-      sycl::range<3> local_sizes(m_tile[0], m_tile[1], 1);
-      sycl::range<3> global_sizes(m_tile_end[0] * m_tile[0],
-                                  m_tile_end[1] * m_tile[1], 1);
+      sycl::range<3> local_sizes(1, m_tile[1], m_tile[0]);
+      sycl::range<3> global_sizes(1, m_tile_end[1] * m_tile[1],
+                                  m_tile_end[0] * m_tile[0]);
+
       return {global_sizes, local_sizes};
     }
     if constexpr (Policy::rank == 3) {
-      sycl::range<3> local_sizes(m_tile[0], m_tile[1], m_tile[2]);
-      sycl::range<3> global_sizes(m_tile_end[0] * m_tile[0],
+      sycl::range<3> local_sizes(m_tile[2], m_tile[1], m_tile[0]);
+      sycl::range<3> global_sizes(m_tile_end[2] * m_tile[2],
                                   m_tile_end[1] * m_tile[1],
-                                  m_tile_end[2] * m_tile[2]);
+                                  m_tile_end[0] * m_tile[0]);
       return {global_sizes, local_sizes};
     }
     if constexpr (Policy::rank == 4) {
       // id0,id1 encoded within first index; id2 to second index; id3 to third
       // index
-      sycl::range<3> local_sizes(m_tile[0] * m_tile[1], m_tile[2], m_tile[3]);
+      sycl::range<3> local_sizes(m_tile[3], m_tile[2], m_tile[0] * m_tile[1]);
       sycl::range<3> global_sizes(
-          m_tile_end[0] * m_tile[0] * m_tile_end[1] * m_tile[1],
-          m_tile_end[2] * m_tile[2], m_tile_end[3] * m_tile[3]);
+          m_tile_end[3] * m_tile[3], m_tile_end[2] * m_tile[2],
+          m_tile_end[0] * m_tile[0] * m_tile_end[1] * m_tile[1]);
       return {global_sizes, local_sizes};
     }
     if constexpr (Policy::rank == 5) {
       // id0,id1 encoded within first index; id2,id3 to second index; id4 to
       // third index
-      sycl::range<3> local_sizes(m_tile[0] * m_tile[1], m_tile[2] * m_tile[3],
-                                 m_tile[4]);
+      sycl::range<3> local_sizes(m_tile[4], m_tile[2] * m_tile[3],
+                                 m_tile[0] * m_tile[1]);
       sycl::range<3> global_sizes(
-          m_tile_end[0] * m_tile[0] * m_tile_end[1] * m_tile[1],
+          m_tile_end[4] * m_tile[4],
           m_tile_end[2] * m_tile[2] * m_tile_end[3] * m_tile[3],
-          m_tile_end[4] * m_tile[4]);
+          m_tile_end[0] * m_tile[0] * m_tile_end[1] * m_tile[1]);
       return {global_sizes, local_sizes};
     }
     if constexpr (Policy::rank == 6) {
       // id0,id1 encoded within first index; id2,id3 to second index; id4,id5 to
       // third index
-      sycl::range<3> local_sizes(m_tile[0] * m_tile[1], m_tile[2] * m_tile[3],
-                                 m_tile[4] * m_tile[5]);
+      sycl::range<3> local_sizes(m_tile[4] * m_tile[5], m_tile[2] * m_tile[3],
+                                 m_tile[0] * m_tile[1]);
       sycl::range<3> global_sizes(
-          m_tile_end[0] * m_tile[0] * m_tile_end[1] * m_tile[1],
+          m_tile_end[4] * m_tile[4] * m_tile_end[5] * m_tile[5],
           m_tile_end[2] * m_tile[2] * m_tile_end[3] * m_tile[3],
-          m_tile_end[4] * m_tile[4] * m_tile_end[5] * m_tile[5]);
+          m_tile_end[0] * m_tile[0] * m_tile_end[1] * m_tile[1]);
       return {global_sizes, local_sizes};
     }
     static_assert(Policy::rank > 1 && Policy::rank < 7,
@@ -223,15 +224,15 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
       const auto range = compute_ranges();
 
       cgh.parallel_for(range, [functor, bare_policy](sycl::nd_item<3> item) {
-        const index_type local_x    = item.get_local_id(0);
+        const index_type local_x    = item.get_local_id(2);
         const index_type local_y    = item.get_local_id(1);
-        const index_type local_z    = item.get_local_id(2);
-        const index_type global_x   = item.get_group(0);
+        const index_type local_z    = item.get_local_id(0);
+        const index_type global_x   = item.get_group(2);
         const index_type global_y   = item.get_group(1);
-        const index_type global_z   = item.get_group(2);
-        const index_type n_global_x = item.get_group_range(0);
+        const index_type global_z   = item.get_group(0);
+        const index_type n_global_x = item.get_group_range(2);
         const index_type n_global_y = item.get_group_range(1);
-        const index_type n_global_z = item.get_group_range(2);
+        const index_type n_global_z = item.get_group_range(0);
 
         Kokkos::Impl::DeviceIterateTile<Policy::rank, BarePolicy, Functor,
                                         typename Policy::work_tag>(
