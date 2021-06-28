@@ -165,6 +165,10 @@ std::ostream& SYCL::impl_sycl_info(std::ostream& os,
             << device.get_info<device::max_work_item_dimensions>()
             << "\nMax Work Group Size: "
             << device.get_info<device::max_work_group_size>()
+            << "\nMax Work Item Sizes: "
+            << device.get_info<device::max_work_item_sizes>()[0] << ", "
+            << device.get_info<device::max_work_item_sizes>()[1] << ", "
+            << device.get_info<device::max_work_item_sizes>()[2]
             << "\nPreferred Vector Width Char: "
             << device.get_info<device::preferred_vector_width_char>()
             << "\nPreferred Vector Width Short: "
