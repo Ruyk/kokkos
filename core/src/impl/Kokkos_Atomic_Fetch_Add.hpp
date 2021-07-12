@@ -177,8 +177,39 @@ atomic_fetch_add(volatile T* const dest,
   }
   return return_val;
 }
-#endif
-#endif
+#endif //  defined(__CUDA_ARCH__) || defined(KOKKOS_IMPL_CUDA_CLANG_WORKAROUND)
+
+#elif defined(KOKKOS_ENABLE_SYCL)
+
+/* Notes on hardware atomics:
+
+Compile with SYCL_USE_NATIVE_FP_ATOMICS defined.
+Currently only created template specialisations for float & double.
+
+How do we query the correct address_space? And is memory_scope::device sufficient?
+
+'volatile' is being cast off here to construct the atomic_ref. Is this allowed? If not, what is the alternative?
+
+*/
+
+inline float atomic_fetch_add(volatile float* const dest, const float val){
+  auto ref = sycl::ONEAPI::atomic_ref<float, sycl::ONEAPI::memory_order::relaxed,
+				       sycl::ONEAPI::memory_scope::device,
+				       sycl::access::address_space::global_space
+				       >(*const_cast<float*>(dest));
+  return ref.fetch_add(val);
+}
+
+inline double atomic_fetch_add(volatile double* const dest, const double val){
+  auto ref = sycl::ONEAPI::atomic_ref<double, sycl::ONEAPI::memory_order::relaxed,
+				       sycl::ONEAPI::memory_scope::device,
+				       sycl::access::address_space::global_space
+				       >(*const_cast<double*>(dest));
+  return ref.fetch_add(val);
+}
+
+#endif // defined(KOKKOS_ENABLE_CUDA)
+
 //----------------------------------------------------------------------------
 #if !defined(__CUDA_ARCH__) || defined(KOKKOS_IMPL_CUDA_CLANG_WORKAROUND)
 #if defined(KOKKOS_ENABLE_GNU_ATOMICS) || defined(KOKKOS_ENABLE_INTEL_ATOMICS)
