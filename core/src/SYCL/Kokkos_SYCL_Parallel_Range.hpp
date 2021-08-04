@@ -74,8 +74,8 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
       :  begin(begin_in), end(end_in), functor(functor_in) {}
 
    private:
-    const int begin;
-    const int end;
+    const typename Policy::index_type begin;
+    const typename Policy::index_type end;
     const Functor functor;
   };
 
@@ -114,28 +114,19 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
       const auto begin = policy.begin();
       const auto end   = policy.end();
 
-      // auto l =
-      //     [=](sycl::nd_item<1> item) {
-      //       const typename Policy::index_type id =
-      //           item.get_global_linear_id() + begin;
-      //       if (id < end) {
-      //         if constexpr (std::is_same<WorkTag, void>::value)
-      //           functor(id);
-      //         else
-      //           functor(WorkTag(), id);
-      //       }
-      //     };
-
       auto kernel = myTestFunctor<Functor>(begin, end, functor);
 
       const sycl::device sycl_device = q.get_device();
-      const sycl::program p{q.get_context()};
+      sycl::program p{q.get_context()};
 
-      // p.build_with_kernel_type<myTestFunctor<Functor>>();
-      // p.build_with_kernel_type<myTestFunctor>();
-      // auto k = p.get_kernel<myTestFunctor<Functor>>();
+      p.build_with_kernel_type<class myTestFunctor<Functor>>();
+      auto k = p.get_kernel<myTestFunctor<Functor>>();
 
-      cgh.parallel_for<Functor>(range, kernel);
+      auto num_regs = k.template get_info<
+          sycl::info::kernel_device_specific::num_regs>(sycl_device);
+
+      myTestFunctor<Functor> fn(begin, end, functor);
+      cgh.parallel_for(range, fn);
 
     });
     // FIXME_SYCL remove guard once implemented for SYCL+CUDA
