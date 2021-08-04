@@ -54,8 +54,33 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
  public:
   using Policy = Kokkos::RangePolicy<Traits...>;
 
- private:
-  using Member       = typename Policy::member_type;
+
+  // template <typename... Args>
+  template <typename Functor>
+  class myTestFunctor {
+   public:
+    void operator() (sycl::nd_item<1> item) const {
+      const typename Policy::index_type id =
+          item.get_global_linear_id() + begin;
+      if (id < end) {
+        if constexpr (std::is_same<WorkTag, void>::value)
+          functor(id);
+        else
+          functor(WorkTag(), id);
+      }
+    }
+
+    myTestFunctor(int begin_in, int end_in, Functor functor_in)
+      :  begin(begin_in), end(end_in), functor(functor_in) {}
+
+   private:
+    const int begin;
+    const int end;
+    const Functor functor;
+  };
+
+
+  private : using Member = typename Policy::member_type;
   using WorkTag      = typename Policy::work_tag;
   using LaunchBounds = typename Policy::launch_bounds;
 
@@ -71,12 +96,10 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
         *space.impl_internal_space_instance();
     sycl::queue& q = *instance.m_queue;
 
-    const sycl::device sycl_device = q.get_device();
-
-    auto group_size_select = sycl_get_opt_block_size<FunctorType, LaunchBounds>(sycl_device, functor);
+    // auto group_size_select = sycl_get_opt_block_size<FunctorType, LaunchBounds>(sycl_device, functor);
 
 
-    auto parallel_for_event = q.submit([functor, policy](sycl::handler& cgh) {
+    auto parallel_for_event = q.submit([functor, policy, q](sycl::handler& cgh) {
 
       // auto maxThreads = instance.m_maxThreadsPerSM;
       auto global_size = policy.end() - policy.begin();
@@ -85,22 +108,35 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
           global_size - (global_size % group_size) + group_size;
 
 
-      const sycl::nd_range<1> range{
-	sycl::range<1>(infl_global_size),
-	sycl::range<1>(group_size)};
+      const sycl::nd_range<1>
+          range{sycl::range<1>(infl_global_size), sycl::range<1>(group_size)};
 
       const auto begin = policy.begin();
       const auto end   = policy.end();
 
-      cgh.parallel_for(range, [=](sycl::nd_item<1> item) {
-        const typename Policy::index_type id = item.get_global_linear_id() + begin;
-        if (id < end) {
-	  if constexpr (std::is_same<WorkTag, void>::value)
-	    functor(id);
-	  else
-	    functor(WorkTag(), id);
-	}
-      });
+      // auto l =
+      //     [=](sycl::nd_item<1> item) {
+      //       const typename Policy::index_type id =
+      //           item.get_global_linear_id() + begin;
+      //       if (id < end) {
+      //         if constexpr (std::is_same<WorkTag, void>::value)
+      //           functor(id);
+      //         else
+      //           functor(WorkTag(), id);
+      //       }
+      //     };
+
+      auto kernel = myTestFunctor<Functor>(begin, end, functor);
+
+      const sycl::device sycl_device = q.get_device();
+      const sycl::program p{q.get_context()};
+
+      // p.build_with_kernel_type<myTestFunctor<Functor>>();
+      // p.build_with_kernel_type<myTestFunctor>();
+      // auto k = p.get_kernel<myTestFunctor<Functor>>();
+
+      cgh.parallel_for<Functor>(range, kernel);
+
     });
     // FIXME_SYCL remove guard once implemented for SYCL+CUDA
 #ifdef KOKKOS_ARCH_INTEL_GEN
