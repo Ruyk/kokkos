@@ -96,20 +96,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
         *space.impl_internal_space_instance();
     sycl::queue& q = *instance.m_queue;
 
-    // auto group_size_select = sycl_get_opt_block_size<FunctorType, LaunchBounds>(sycl_device, functor);
-
-
     auto parallel_for_event = q.submit([functor, policy, q](sycl::handler& cgh) {
-
-      // auto maxThreads = instance.m_maxThreadsPerSM;
-      auto global_size = policy.end() - policy.begin();
-      auto group_size = 32; // <- try this for now
-      auto infl_global_size =
-          global_size - (global_size % group_size) + group_size;
-
-
-      const sycl::nd_range<1>
-          range{sycl::range<1>(infl_global_size), sycl::range<1>(group_size)};
 
       const auto begin = policy.begin();
       const auto end   = policy.end();
@@ -124,6 +111,16 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
 
       auto num_regs = k.template get_info<
           sycl::info::kernel_device_specific::num_regs>(sycl_device);
+
+      auto group_size_select = sycl_get_opt_block_size<FunctorType, LaunchBounds>(q, functor, num_regs);
+
+      auto global_size = policy.end() - policy.begin();
+      auto group_size = group_size_select;
+      auto infl_global_size =
+          global_size - (global_size % group_size) + group_size;
+
+      const sycl::nd_range<1>
+          range{sycl::range<1>(infl_global_size), sycl::range<1>(group_size)};
 
       myTestFunctor<Functor> fn(begin, end, functor);
       cgh.parallel_for(range, fn);

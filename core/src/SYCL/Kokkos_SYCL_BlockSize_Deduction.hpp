@@ -55,12 +55,10 @@ namespace Impl {
 
 // Note: hardcoded for Compute 8.0
 // https://docs.nvidia.com/cuda/ampere-tuning-guide/index.html
-inline int sycl_max_active_blocks_per_sm(int block_size, size_t dynamic_shmem) {
+inline int sycl_max_active_blocks_per_sm(int block_size, size_t dynamic_shmem, const int regs_per_thread) {
   // Limits due do registers/SM
   // int const regs_per_sm = properties.regsPerMultiprocessor;
   int const regs_per_sm     = 65536;
-  // int const regs_per_thread = attributes.numRegs;  // TODO kernel info
-  int const regs_per_thread = 100; // TODO kernel info
   int const max_blocks_regs = regs_per_sm / (regs_per_thread * block_size);
 
   // Limits due to shared memory/SM
@@ -68,7 +66,7 @@ inline int sycl_max_active_blocks_per_sm(int block_size, size_t dynamic_shmem) {
   // properties.sharedMemPerMultiprocessor; size_t const shmem_per_block =
   // properties.sharedMemPerBlock;
   size_t const shmem_per_sm            = 167936;
-  size_t const shmem_per_block         = 167936; // 49152 TODO! conflict, see notes
+  size_t const shmem_per_block         = 167936;
 
   // size_t const static_shmem            = attributes.sharedSizeBytes;
   // size_t const dynamic_shmem_per_block = attributes.maxDynamicSharedSizeBytes;
@@ -114,24 +112,26 @@ inline int sycl_max_active_blocks_per_sm(int block_size, size_t dynamic_shmem) {
 
 template <typename UnaryFunction, typename FunctorType, typename LaunchBounds>
 inline int sycl_deduce_block_size(bool early_termination,
-				  const sycl::device& d,
+				  const sycl::queue& q,
 				  const FunctorType& f,
                                   // cudaDeviceProp const& properties,
                                   // cudaFuncAttributes const& attributes,
                                   UnaryFunction block_size_to_dynamic_shmem,
+				  const int num_regs,
                                   LaunchBounds) {
 
   // TODO:
   // TODO maxThreadsPerMultiProcessor
   // TODO max_active_blocks_per_sm
 
+  const sycl::device sycl_device = q.get_device();
 
   // Limits
   int const max_threads_per_sm = 2048; //dQ
 
-  int const num_SM = d.template get_info<sycl::info::device::max_compute_units>();
+  int const num_SM = sycl_device.template get_info<sycl::info::device::max_compute_units>();
   int const device_max_threads_per_block =
-    d.template get_info<sycl::info::device::max_work_group_size>(); // works!
+    sycl_device.template get_info<sycl::info::device::max_work_group_size>(); // works!
 
   // TODO: not accounting for function attributes' maxThreadsPerBlock
   //              attributes.maxThreadsPerBlock);
@@ -152,7 +152,7 @@ inline int sycl_deduce_block_size(bool early_termination,
 
     // TODO max_active_blocks_per_sm
     int blocks_per_sm = sycl_max_active_blocks_per_sm(
-        block_size, dynamic_shmem);
+        block_size, dynamic_shmem,num_regs);
 
     int threads_per_sm = blocks_per_sm * block_size;
 
@@ -229,8 +229,9 @@ inline int sycl_deduce_block_size(bool early_termination,
 
 
 template <class FunctorType, class LaunchBounds>
-int sycl_get_opt_block_size(const sycl::device& d,
-                            const FunctorType& f) {
+int sycl_get_opt_block_size(const sycl::queue& q,
+                            const FunctorType& f,
+			    const int num_regs) {
 
   // auto const& prop = Kokkos::Cuda().cuda_device_prop();
 
@@ -242,7 +243,7 @@ int sycl_get_opt_block_size(const sycl::device& d,
     return functor_shmem;
   };
 
-  return sycl_deduce_block_size(false, d, f, block_size_to_dynamic_shmem,
+  return sycl_deduce_block_size(false, q, f, block_size_to_dynamic_shmem, num_regs,
                                 LaunchBounds{});
 }
 
