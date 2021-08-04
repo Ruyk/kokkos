@@ -46,6 +46,7 @@
 #define KOKKOS_SYCL_PARALLEL_RANGE_HPP_
 
 #include <impl/KokkosExp_IterateTileGPU.hpp>
+#include <SYCL/Kokkos_SYCL_BlockSize_Deduction.hpp>
 
 template <class FunctorType, class... Traits>
 class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
@@ -70,16 +71,35 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
         *space.impl_internal_space_instance();
     sycl::queue& q = *instance.m_queue;
 
-    auto parallel_for_event = q.submit([functor, policy](sycl::handler& cgh) {
-      sycl::range<1> range(policy.end() - policy.begin());
-      const auto begin = policy.begin();
+    const sycl::device sycl_device = q.get_device();
 
-      cgh.parallel_for(range, [=](sycl::item<1> item) {
-        const typename Policy::index_type id = item.get_linear_id() + begin;
-        if constexpr (std::is_same<WorkTag, void>::value)
-          functor(id);
-        else
-          functor(WorkTag(), id);
+    auto group_size_select = sycl_get_opt_block_size<FunctorType, LaunchBounds>(sycl_device, functor);
+
+
+    auto parallel_for_event = q.submit([functor, policy](sycl::handler& cgh) {
+
+      // auto maxThreads = instance.m_maxThreadsPerSM;
+      auto global_size = policy.end() - policy.begin();
+      auto group_size = 32; // <- try this for now
+      auto infl_global_size =
+          global_size - (global_size % group_size) + group_size;
+
+
+      const sycl::nd_range<1> range{
+	sycl::range<1>(infl_global_size),
+	sycl::range<1>(group_size)};
+
+      const auto begin = policy.begin();
+      const auto end   = policy.end();
+
+      cgh.parallel_for(range, [=](sycl::nd_item<1> item) {
+        const typename Policy::index_type id = item.get_global_linear_id() + begin;
+        if (id < end) {
+	  if constexpr (std::is_same<WorkTag, void>::value)
+	    functor(id);
+	  else
+	    functor(WorkTag(), id);
+	}
       });
     });
     // FIXME_SYCL remove guard once implemented for SYCL+CUDA
