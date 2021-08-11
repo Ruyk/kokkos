@@ -101,18 +101,19 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
       const auto begin = policy.begin();
       const auto end   = policy.end();
 
-      auto kernel = myTestFunctor<Functor>(begin, end, functor);
-
       const sycl::device sycl_device = q.get_device();
       sycl::program p{q.get_context()};
 
-      p.build_with_kernel_type<class myTestFunctor<Functor>>();
+      p.build_with_kernel_type<myTestFunctor<Functor>>();
       auto k = p.get_kernel<myTestFunctor<Functor>>();
 
       auto num_regs = k.template get_info<
           sycl::info::kernel_device_specific::num_regs>(sycl_device);
 
-      auto group_size_select = sycl_get_opt_block_size<FunctorType, LaunchBounds>(q, functor, num_regs);
+      auto group_size_select =
+          sycl_get_opt_block_size<FunctorType, LaunchBounds>(q, functor,
+                                                             num_regs);
+      // auto group_size_select = 32;
 
       auto global_size = policy.end() - policy.begin();
       auto group_size = group_size_select;
