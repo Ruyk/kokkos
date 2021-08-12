@@ -74,6 +74,9 @@ void USM_memcpy(void* dst, const void* src, size_t n) {
 }
 }  // namespace
 
+
+//======================Device-Device==================================
+//DDS
 DeepCopy<Kokkos::Experimental::SYCLDeviceUSMSpace,
          Kokkos::Experimental::SYCLDeviceUSMSpace, Kokkos::Experimental::SYCL>::
     DeepCopy(const Kokkos::Experimental::SYCL& instance, void* dst,
@@ -88,6 +91,9 @@ DeepCopy<Kokkos::Experimental::SYCLDeviceUSMSpace,
   USM_memcpy(dst, src, n);
 }
 
+
+//=======================Host-Device===================================
+//HDS
 DeepCopy<Kokkos::HostSpace, Kokkos::Experimental::SYCLDeviceUSMSpace,
          Kokkos::Experimental::SYCL>::DeepCopy(const Kokkos::Experimental::SYCL&
                                                    instance,
@@ -102,6 +108,9 @@ DeepCopy<Kokkos::HostSpace, Kokkos::Experimental::SYCLDeviceUSMSpace,
   USM_memcpy(dst, src, n);
 }
 
+
+//=======================Device-Host===================================
+//DHS
 DeepCopy<Kokkos::Experimental::SYCLDeviceUSMSpace, Kokkos::HostSpace,
          Kokkos::Experimental::SYCL>::DeepCopy(const Kokkos::Experimental::SYCL&
                                                    instance,
@@ -133,6 +142,11 @@ SYCLDeviceUSMSpace::SYCLDeviceUSMSpace(sycl::queue queue)
 SYCLSharedUSMSpace::SYCLSharedUSMSpace()
     : m_queue(*SYCL().impl_internal_space_instance()->m_queue) {}
 SYCLSharedUSMSpace::SYCLSharedUSMSpace(sycl::queue queue)
+    : m_queue(std::move(queue)) {}
+
+SYCLHostUSMSpace::SYCLHostUSMSpace()
+    : m_queue(*SYCL().impl_internal_space_instance()->m_queue) {}
+SYCLHostUSMSpace::SYCLHostUSMSpace(sycl::queue queue)
     : m_queue(std::move(queue)) {}
 
 void* allocate_sycl(
@@ -184,6 +198,19 @@ void* SYCLSharedUSMSpace::allocate(const char* arg_label,
       sycl::usm::alloc::shared, m_queue);
 }
 
+void* SYCLHostUSMSpace::allocate(const size_t arg_alloc_size) const {
+  return allocate("[unlabeled]", arg_alloc_size);
+}
+void* SYCLHostUSMSpace::allocate(const char* arg_label,
+                                   const size_t arg_alloc_size,
+                                   const size_t arg_logical_size) const {
+  return allocate_sycl(
+      arg_label, arg_alloc_size, arg_logical_size,
+      Kokkos::Tools::make_space_handle(name()),
+      RawMemoryAllocationFailure::AllocationMechanism::SYCLMallocHost,
+      sycl::usm::alloc::host, m_queue);
+}
+
 void sycl_deallocate(const char* arg_label, void* const arg_alloc_ptr,
                      const size_t arg_alloc_size, const size_t arg_logical_size,
                      const Kokkos::Tools::SpaceHandle arg_handle,
@@ -224,6 +251,20 @@ void SYCLSharedUSMSpace::deallocate(const char* arg_label,
                   Kokkos::Tools::make_space_handle(name()), m_queue);
 }
 
+
+void SYCLHostUSMSpace::deallocate(void* const arg_alloc_ptr,
+                                    const size_t arg_alloc_size) const {
+  deallocate("[unlabeled]", arg_alloc_ptr, arg_alloc_size);
+}
+
+void SYCLHostUSMSpace::deallocate(const char* arg_label,
+                                    void* const arg_alloc_ptr,
+                                    const size_t arg_alloc_size,
+                                    const size_t arg_logical_size) const {
+  sycl_deallocate(arg_label, arg_alloc_ptr, arg_alloc_size, arg_logical_size,
+                  Kokkos::Tools::make_space_handle(name()), m_queue);
+}
+
 }  // namespace Experimental
 }  // namespace Kokkos
 
@@ -236,6 +277,9 @@ SharedAllocationRecord<void, void> SharedAllocationRecord<
 
 SharedAllocationRecord<void, void> SharedAllocationRecord<
     Kokkos::Experimental::SYCLSharedUSMSpace, void>::s_root_record;
+
+SharedAllocationRecord<void, void> SharedAllocationRecord<
+    Kokkos::Experimental::SYCLHostUSMSpace, void>::s_root_record;
 #endif
 
 SharedAllocationRecord<Kokkos::Experimental::SYCLDeviceUSMSpace, void>::
@@ -283,6 +327,28 @@ SharedAllocationRecord<Kokkos::Experimental::SYCLSharedUSMSpace, void>::
                                                   arg_label);
 }
 
+
+SharedAllocationRecord<Kokkos::Experimental::SYCLHostUSMSpace, void>::
+    SharedAllocationRecord(
+        const Kokkos::Experimental::SYCLHostUSMSpace& arg_space,
+        const std::string& arg_label, const size_t arg_alloc_size,
+        const SharedAllocationRecord<void, void>::function_type arg_dealloc)
+    // Pass through allocated [ SharedAllocationHeader , user_memory ]
+    // Pass through deallocation function
+    : base_t(
+#ifdef KOKKOS_ENABLE_DEBUG
+          &SharedAllocationRecord<Kokkos::Experimental::SYCLHostUSMSpace,
+                                  void>::s_root_record,
+#endif
+          Impl::checked_allocation_with_header(arg_space, arg_label,
+                                               arg_alloc_size),
+          sizeof(SharedAllocationHeader) + arg_alloc_size, arg_dealloc),
+      m_space(arg_space) {
+
+  this->base_t::_fill_host_accessible_header_info(*base_t::m_alloc_ptr,
+                                                  arg_label);
+}
+
 }  // namespace Impl
 }  // namespace Kokkos
 
@@ -318,6 +384,17 @@ SharedAllocationRecord<Kokkos::Experimental::SYCLSharedUSMSpace,
                      alloc_size, alloc_size - sizeof(SharedAllocationHeader));
 }
 
+SharedAllocationRecord<Kokkos::Experimental::SYCLHostUSMSpace,
+                       void>::~SharedAllocationRecord() {
+  const char* label = nullptr;
+  if (Kokkos::Profiling::profileLibraryLoaded()) {
+    label = RecordBase::m_alloc_ptr->m_label;
+  }
+  const auto alloc_size = SharedAllocationRecord<void, void>::m_alloc_size;
+  m_space.deallocate(label, SharedAllocationRecord<void, void>::m_alloc_ptr,
+                     alloc_size, alloc_size - sizeof(SharedAllocationHeader));
+}
+
 //----------------------------------------------------------------------------
 
 }  // namespace Impl
@@ -340,6 +417,8 @@ template class SharedAllocationRecordCommon<
     Kokkos::Experimental::SYCLDeviceUSMSpace>;
 template class SharedAllocationRecordCommon<
     Kokkos::Experimental::SYCLSharedUSMSpace>;
+template class SharedAllocationRecordCommon<
+    Kokkos::Experimental::SYCLHostUSMSpace>;
 
 }  // namespace Impl
 }  // namespace Kokkos
