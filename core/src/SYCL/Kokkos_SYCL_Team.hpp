@@ -89,18 +89,18 @@ class SYCLTeamMember {
   }
 
   KOKKOS_INLINE_FUNCTION int league_rank() const {
-    return m_item.get_group_linear_id();  // TODO check
+    return m_item.get_group_linear_id();
   }
   KOKKOS_INLINE_FUNCTION int league_size() const {
     // FIXME_SYCL needs to be revised for vector_length>1.
-    return m_item.get_group_range(1);
+    return m_item.get_group_range(0);
   }
   KOKKOS_INLINE_FUNCTION int team_rank() const {
-    return m_item.get_local_linear_id(); // TODO check
+    return m_item.get_local_linear_id();
   }
   KOKKOS_INLINE_FUNCTION int team_size() const {
     // FIXME_SYCL needs to be revised for vector_length>1.
-    return m_item.get_local_range(1);
+    return m_item.get_local_range(0);
   }
   KOKKOS_INLINE_FUNCTION void team_barrier() const { m_item.barrier(); }
 
@@ -112,7 +112,7 @@ class SYCLTeamMember {
   KOKKOS_INLINE_FUNCTION void team_broadcast(ValueType& val,
                                              const int thread_id) const {
     val = sycl::ONEAPI::broadcast(m_item.get_group(), val,
-                                  sycl::id<2>(0, thread_id));
+                                  sycl::id<2>(thread_id, 0));
   }
 
   template <class Closure, class ValueType>
@@ -183,7 +183,7 @@ class SYCLTeamMember {
   // The accumulated value is returned.
   template <typename Type>
   static Type prescan(sycl::nd_item<2> m_item, Type* temp, int n) {
-    int thid = m_item.get_local_id(1);
+    int thid = m_item.get_local_id(0);
 
     // First do a reduction saving intermediate results
     for (int stride = 1; stride < n; stride <<= 1) {
