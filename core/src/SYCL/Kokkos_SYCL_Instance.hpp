@@ -49,7 +49,7 @@
 #include <CL/sycl.hpp>
 
 #include <impl/Kokkos_Error.hpp>
-
+#include <impl/Kokkos_Profiling.hpp>
 namespace Kokkos {
 namespace Experimental {
 namespace Impl {
@@ -71,6 +71,7 @@ class SYCLInternal {
   void* resize_team_scratch_space(std::int64_t bytes,
                                   bool force_shrink = false);
 
+  uint32_t impl_get_instance_id() const;
   int m_syclDev = -1;
 
   size_t m_maxWorkgroupSize   = 0;
@@ -86,6 +87,8 @@ class SYCLInternal {
   int64_t m_team_scratch_current_size = 0;
   void* m_team_scratch_ptr            = nullptr;
 
+  uint32_t m_instance_id = Kokkos::Tools::Experimental::Impl::idForInstance<
+      Kokkos::Experimental::SYCL>(reinterpret_cast<uintptr_t>(this));
   std::optional<sycl::queue> m_queue;
 
   // Using std::vector<std::optional<sycl::queue>> reveals a compiler bug when
@@ -94,6 +97,7 @@ class SYCLInternal {
   // We need a mutex for thread safety when modifying all_queues.
   static std::mutex mutex;
 
+#ifndef SYCL_DEVICE_COPYABLE
   // USMObjectMem is a reusable buffer for a single object
   // in USM memory
   template <sycl::usm::alloc Kind>
@@ -105,7 +109,6 @@ class SYCLInternal {
       reset();
       m_q.emplace(std::move(q));
     }
-
     USMObjectMem() = default;
     explicit USMObjectMem(sycl::queue q) noexcept : m_q(std::move(q)) {}
 
@@ -258,6 +261,7 @@ class SYCLInternal {
 
   using IndirectReducerMem = USMObjectMem<sycl::usm::alloc::shared>;
   IndirectReducerMem m_indirectReducerMem;
+#endif
 
   bool was_finalized = false;
 
@@ -307,6 +311,15 @@ class SYCLFunctionWrapper<Functor, Storage, true> {
   static void register_event(Storage&, sycl::event){};
 };
 
+#ifdef SYCL_DEVICE_COPYABLE
+template <typename Functor, typename Storage>
+class SYCLFunctionWrapper<Functor, Storage, false> : public Functor {
+ public:
+  SYCLFunctionWrapper(const Functor& functor, Storage&) : Functor(functor) {}
+
+  const SYCLFunctionWrapper& get_functor() const { return *this; }
+};
+#else
 template <typename Functor, typename Storage>
 class SYCLFunctionWrapper<Functor, Storage, false> {
   const Functor& m_kernelFunctor;
@@ -323,6 +336,7 @@ class SYCLFunctionWrapper<Functor, Storage, false> {
     storage.register_event(event);
   }
 };
+#endif
 
 template <typename Functor, typename Storage>
 auto make_sycl_function_wrapper(const Functor& functor, Storage& storage) {
@@ -331,4 +345,17 @@ auto make_sycl_function_wrapper(const Functor& functor, Storage& storage) {
 }  // namespace Impl
 }  // namespace Experimental
 }  // namespace Kokkos
+
+#ifdef SYCL_DEVICE_COPYABLE
+template <typename Functor, typename Storage>
+struct sycl::is_device_copyable<
+    Kokkos::Experimental::Impl::SYCLFunctionWrapper<Functor, Storage, false>>
+    : std::true_type {};
+
+template <typename Functor, typename Storage>
+struct sycl::is_device_copyable<
+    const Kokkos::Experimental::Impl::SYCLFunctionWrapper<Functor, Storage,
+                                                          false>>
+    : std::true_type {};
+#endif
 #endif

@@ -214,9 +214,12 @@ namespace Kokkos {
 ///   // operator() or join().
 ///   using value_type = PodType;
 ///
-///   void operator () (const ExecPolicy::member_type & i, value_type& update,
-///   const bool final_pass) const; void init (value_type& update) const; void
-///   join (volatile value_type& update, volatile const value_type& input) const
+///   void operator () (const ExecPolicy::member_type & i,
+///                     value_type& update,
+///                     const bool final_pass) const;
+///   void init (value_type& update) const;
+///   void join (volatile value_type& update,
+//               volatile const value_type& input) const
 /// };
 /// \endcode
 ///
@@ -410,7 +413,8 @@ inline void parallel_scan(
 
   Kokkos::Tools::Impl::end_parallel_scan(inner_policy, functor, str, kpID);
 
-  policy.space().fence();
+  policy.space().fence(
+      "Kokkos::parallel_scan: fence due to result being a value, not a view");
 }
 
 template <class FunctorType, class ReturnType>

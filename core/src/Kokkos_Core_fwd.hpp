@@ -212,7 +212,7 @@ template <typename DstMemorySpace, typename SrcMemorySpace>
 struct verify_space<DstMemorySpace, SrcMemorySpace, false> {
   KOKKOS_FUNCTION static void check() {
     Kokkos::abort(
-        "Kokkos::View ERROR: attempt to access inaccessible memory space");
+        "Kokkos::View ERROR: attempt to access inaccessible memory space\n");
   };
 };
 
@@ -240,7 +240,8 @@ class LogicalMemorySpace;
 
 namespace Kokkos {
 void fence();
-}
+void fence(const std::string &);
+}  // namespace Kokkos
 
 //----------------------------------------------------------------------------
 

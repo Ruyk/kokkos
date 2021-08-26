@@ -64,8 +64,6 @@ class TeamPolicyInternal<Kokkos::Experimental::SYCL, Properties...>
   friend class TeamPolicyInternal;
 
  private:
-  static int constexpr MAX_WARP = 8;
-
   typename traits::execution_space m_space;
   int m_league_size;
   int m_team_size;
@@ -129,11 +127,18 @@ class TeamPolicyInternal<Kokkos::Experimental::SYCL, Properties...>
   }
   inline bool impl_auto_vector_length() const { return m_tune_vector_length; }
   inline bool impl_auto_team_size() const { return m_tune_team_size; }
+  // FIXME_SYCL This is correct in most cases, but not necessarily in case a
+  // custom sycl::queue is used to initialize the execution space.
   static int vector_length_max() {
-    // FIXME_SYCL provide a reasonable value
-    return 1;
+    std::vector<size_t> sub_group_sizes =
+        execution_space{}
+            .impl_internal_space_instance()
+            ->m_queue->get_device()
+            .template get_info<sycl::info::device::sub_group_sizes>();
+    return *std::max_element(sub_group_sizes.begin(), sub_group_sizes.end());
   }
 
+ private:
   static int verify_requested_vector_length(int requested_vector_length) {
     int test_vector_length =
         std::min(requested_vector_length, vector_length_max());
@@ -141,18 +146,14 @@ class TeamPolicyInternal<Kokkos::Experimental::SYCL, Properties...>
     // Allow only power-of-two vector_length
     if (!(is_integral_power_of_two(test_vector_length))) {
       int test_pow2 = 1;
-      for (int i = 0; i < 5; i++) {
-        test_pow2 = test_pow2 << 1;
-        if (test_pow2 > test_vector_length) {
-          break;
-        }
-      }
+      while (test_pow2 < test_vector_length) test_pow2 <<= 1;
       test_vector_length = test_pow2 >> 1;
     }
 
     return test_vector_length;
   }
 
+ public:
   static int scratch_size_max(int level) {
     return level == 0 ? 1024 * 32
                       :           // FIXME_SYCL arbitrarily setting this to 32kB
@@ -209,7 +210,21 @@ class TeamPolicyInternal<Kokkos::Experimental::SYCL, Properties...>
         m_chunk_size(0),
         m_tune_team_size(bool(team_size_request <= 0)),
         m_tune_vector_length(bool(vector_length_request <= 0)) {
-    // FIXME_SYCL check paramters
+    // FIXME_SYCL Check that league size is permissible,
+    // https://github.com/intel/llvm/pull/4064
+
+    // Make sure total block size is permissible
+    if (m_team_size * m_vector_length >
+        static_cast<int>(
+            m_space.impl_internal_space_instance()->m_maxWorkgroupSize)) {
+      Impl::throw_runtime_exception(
+          std::string("Kokkos::TeamPolicy<SYCL> the team size is too large. "
+                      "Team size x vector length is " +
+                      std::to_string(m_team_size * m_vector_length) +
+                      " but must be smaller than ") +
+          std::to_string(
+              m_space.impl_internal_space_instance()->m_maxWorkgroupSize));
+    }
   }
 
   /** \brief  Specify league size, request team size */
@@ -314,8 +329,9 @@ class TeamPolicyInternal<Kokkos::Experimental::SYCL, Properties...>
          2 * sizeof(double) - m_team_scratch_size[0]) /
         (sizeof(double) + m_thread_scratch_size[0]);
     return std::min<int>(
-        m_space.impl_internal_space_instance()->m_maxWorkgroupSize,
-        max_threads_for_memory);
+               m_space.impl_internal_space_instance()->m_maxWorkgroupSize,
+               max_threads_for_memory) /
+           impl_vector_length();
   }
 
   template <class FunctorType>
@@ -338,8 +354,9 @@ class TeamPolicyInternal<Kokkos::Experimental::SYCL, Properties...>
         (sizeof(double) + sizeof(value_type) * value_count +
          m_thread_scratch_size[0]);
     return std::min<int>(
-        m_space.impl_internal_space_instance()->m_maxWorkgroupSize,
-        max_threads_for_memory);
+               m_space.impl_internal_space_instance()->m_maxWorkgroupSize,
+               max_threads_for_memory) /
+           impl_vector_length();
   }
 
   template <class FunctorType>
@@ -403,14 +420,22 @@ class ParallelFor<FunctorType, Kokkos::TeamPolicy<Properties...>,
 
       cgh.parallel_for(
           sycl::nd_range<2>(
-              sycl::range<2>(m_league_size * m_team_size, m_vector_size),
+              sycl::range<2>(m_team_size, m_league_size * m_vector_size),
               sycl::range<2>(m_team_size, m_vector_size)),
           [=](sycl::nd_item<2> item) {
+#ifdef KOKKOS_ENABLE_DEBUG
+            if (item.get_sub_group().get_local_range() %
+                    item.get_local_range(1) !=
+                0)
+              Kokkos::abort(
+                  "The sub_group size is not divisible by the vector_size. "
+                  "Choose a smaller vector_size!");
+#endif
             const member_type team_member(
                 team_scratch_memory_L0.get_pointer(), shmem_begin,
                 scratch_size[0],
                 static_cast<char*>(scratch_ptr[1]) +
-                    item.get_group(0) * scratch_size[1],
+                    item.get_group(1) * scratch_size[1],
                 scratch_size[1], item);
             if constexpr (std::is_same<work_tag, void>::value)
               functor(team_member);
@@ -431,17 +456,26 @@ class ParallelFor<FunctorType, Kokkos::TeamPolicy<Properties...>,
   inline void execute() const {
     if (m_league_size == 0) return;
 
+#ifdef SYCL_DEVICE_COPYABLE
+    struct Dummy {
+    } indirectKernelMem;
+#else
     Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem&
         indirectKernelMem = m_policy.space()
                                 .impl_internal_space_instance()
                                 ->m_indirectKernelMem;
+#endif
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
 
+#ifdef SYCL_DEVICE_COPYABLE
+    sycl_direct_launch(m_policy, functor_wrapper.get_functor());
+#else
     sycl::event event =
         sycl_direct_launch(m_policy, functor_wrapper.get_functor());
     functor_wrapper.register_event(indirectKernelMem, event);
+#endif
   }
 
   ParallelFor(FunctorType const& arg_functor, Policy const& arg_policy)
@@ -478,9 +512,13 @@ class ParallelFor<FunctorType, Kokkos::TeamPolicy<Properties...>,
       Kokkos::Impl::throw_runtime_exception(out.str());
     }
 
+    const auto max_team_size =
+        m_policy.team_size_max(arg_functor, ParallelForTag{});
     if (m_team_size > m_policy.team_size_max(arg_functor, ParallelForTag{}))
       Kokkos::Impl::throw_runtime_exception(
-          "Kokkos::Impl::ParallelFor<SYCL> requested too large team size.");
+          "Kokkos::Impl::ParallelFor<SYCL> requested too large team size. The "
+          "maximal team_size is " +
+          std::to_string(max_team_size) + '!');
   }
 };
 
@@ -646,9 +684,17 @@ class ParallelReduce<FunctorType, Kokkos::TeamPolicy<Properties...>,
 
         cgh.parallel_for(
             sycl::nd_range<2>(
-                sycl::range<2>(m_league_size * m_team_size, m_vector_size),
+                sycl::range<2>(m_team_size, m_league_size * m_vector_size),
                 sycl::range<2>(m_team_size, m_vector_size)),
             [=](sycl::nd_item<2> item) {
+#ifdef KOKKOS_ENABLE_DEBUG
+              if (item.get_sub_group().get_local_range() %
+                      item.get_local_range(1) !=
+                  0)
+                Kokkos::abort(
+                    "The sub_group size is not divisible by the vector_size. "
+                    "Choose a smaller vector_size!");
+#endif
               const auto local_id = item.get_local_linear_id();
               const auto global_id =
                   wgroup_size * item.get_group_linear_id() + local_id;
@@ -667,7 +713,7 @@ class ParallelReduce<FunctorType, Kokkos::TeamPolicy<Properties...>,
                     team_scratch_memory_L0.get_pointer(), shmem_begin,
                     scratch_size[0],
                     static_cast<char*>(scratch_ptr[1]) +
-                        item.get_group(0) * scratch_size[1],
+                        item.get_group(1) * scratch_size[1],
                     scratch_size[1], item);
                 if constexpr (std::is_same<WorkTag, void>::value)
                   functor(team_member, update);
@@ -682,7 +728,7 @@ class ParallelReduce<FunctorType, Kokkos::TeamPolicy<Properties...>,
                                  &results_ptr[global_id * value_count]);
                 }
               }
-              item.barrier(sycl::access::fence_space::local_space);
+              sycl::group_barrier(item.get_group());
 
               SYCLReduction::workgroup_reduction<ValueJoin, ValueOps, WorkTag>(
                   item, local_mem.get_pointer(), results_ptr,
@@ -719,22 +765,32 @@ class ParallelReduce<FunctorType, Kokkos::TeamPolicy<Properties...>,
 
  public:
   inline void execute() {
+#ifdef SYCL_DEVICE_COPYABLE
+    struct Dummy {
+    } indirectKernelMem, indirectReducerMem;
+#else
     Kokkos::Experimental::Impl::SYCLInternal& instance =
         *m_policy.space().impl_internal_space_instance();
     using IndirectKernelMem =
         Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem;
     IndirectKernelMem& indirectKernelMem  = instance.m_indirectKernelMem;
     IndirectKernelMem& indirectReducerMem = instance.m_indirectReducerMem;
+#endif
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
     const auto reducer_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_reducer, indirectReducerMem);
 
-    sycl::event event = sycl_direct_launch(
+#ifdef SYCL_DEVICE_COPYABLE
+    sycl_direct_launch(m_policy, functor_wrapper.get_functor(),
+                       reducer_wrapper.get_functor());
+#else
+    sycl::event event                     = sycl_direct_launch(
         m_policy, functor_wrapper.get_functor(), reducer_wrapper.get_functor());
     functor_wrapper.register_event(indirectKernelMem, event);
     reducer_wrapper.register_event(indirectReducerMem, event);
+#endif
   }
 
  private:
