@@ -47,9 +47,11 @@
 
 #include <optional>
 #include <CL/sycl.hpp>
+#include <CL/sycl/backend/cuda.hpp>
 
 #include <impl/Kokkos_Error.hpp>
 
+#include "/usr/local/cuda/include/cuda.h"
 namespace Kokkos {
 namespace Experimental {
 namespace Impl {
@@ -330,6 +332,33 @@ template <typename Functor, typename Storage>
 auto make_sycl_function_wrapper(const Functor& functor, Storage& storage) {
   return SYCLFunctionWrapper<Functor, Storage>(functor, storage);
 }
+
+template <typename Functor>
+auto make_sycl_constant_wrapper(const Functor& functor, sycl::queue q) {
+
+  CUresult ret_err;
+
+  auto my_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(q.get_context());
+
+  std::vector<CUmodule> mod_vec = my_bundle.get_native<sycl::backend::cuda>();
+
+  assert(mod_vec.size() == 1);
+
+  CUmodule mod = mod_vec[0];
+
+  CUdeviceptr d_constSymbol;
+  ret_err = cuModuleGetGlobal(&d_constSymbol, NULL, mod, "a_most_unique_symbol_name");
+  assert(ret_err == CUDA_SUCCESS);
+
+  ret_err = cuMemcpyHtoD(d_constSymbol, &functor, sizeof(functor));
+  assert(ret_err == CUDA_SUCCESS);
+
+  const Functor& const_functor =
+      *((const Functor*)d_constSymbol);
+
+  return std::reference_wrapper{const_functor};
+}
+
 }  // namespace Impl
 }  // namespace Experimental
 }  // namespace Kokkos

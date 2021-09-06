@@ -103,11 +103,32 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
                                 .impl_internal_space_instance()
                                 ->m_indirectKernelMem;
 
+
+#if 0
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
+
     sycl::event event =
         sycl_direct_launch(m_policy, functor_wrapper.get_functor());
+
     functor_wrapper.register_event(indirectKernelMem, event);
+#else
+
+    const Kokkos::Experimental::SYCL& space = m_policy.space();
+    Kokkos::Experimental::Impl::SYCLInternal& instance =
+        *space.impl_internal_space_instance();
+    sycl::queue& q = *instance.m_queue;
+
+    const auto const_functor = Experimental::Impl::make_sycl_constant_wrapper(
+        m_functor, q);
+
+    std::cout << "About to launch constant wrapped kernel" << std::endl;
+
+    sycl::event event =
+        sycl_direct_launch(m_policy, const_functor);
+
+    // TODO need to register event here?
+#endif
   }
 
   ParallelFor(const ParallelFor&) = delete;
