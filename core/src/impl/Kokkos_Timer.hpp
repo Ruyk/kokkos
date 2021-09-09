@@ -42,22 +42,38 @@
 //@HEADER
 */
 
-#ifndef KOKKOS_IMPLWALLTIME_HPP
-#define KOKKOS_IMPLWALLTIME_HPP
+#ifndef KOKKOS_TIMER_HPP
+#define KOKKOS_TIMER_HPP
 
-#include <Kokkos_Timer.hpp>
+#include <Kokkos_Macros.hpp>
+#include <chrono>
 
 namespace Kokkos {
-namespace Impl {
 
-/** \brief  Time since construction
- *   Timer promoted from Impl to Kokkos ns
- *   This file included for backwards compatibility
- */
+/** \brief  Time since construction */
 
-using Kokkos::Timer;
+class Timer {
+ private:
+  std::chrono::high_resolution_clock::time_point m_old;
+  Timer(const Timer&);
+  Timer& operator=(const Timer&);
 
-}  // namespace Impl
+ public:
+  inline void reset() { m_old = std::chrono::high_resolution_clock::now(); }
+
+  inline ~Timer() = default;
+
+  inline Timer() { reset(); }
+
+  inline double seconds() const {
+    std::chrono::high_resolution_clock::time_point m_new =
+        std::chrono::high_resolution_clock::now();
+    return std::chrono::duration_cast<std::chrono::duration<double>>(m_new -
+                                                                     m_old)
+        .count();
+  }
+};
+
 }  // namespace Kokkos
 
-#endif /* #ifndef KOKKOS_IMPLWALLTIME_HPP */
+#endif /* #ifndef KOKKOS_TIMER_HPP */
