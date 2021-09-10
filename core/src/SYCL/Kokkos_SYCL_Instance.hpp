@@ -130,7 +130,9 @@ class SYCLInternal {
     using AllocationSpace =
         std::conditional_t<Kind == sycl::usm::alloc::device,
                            Kokkos::Experimental::SYCLDeviceUSMSpace,
-                           Kokkos::Experimental::SYCLSharedUSMSpace>;
+                           std::conditional_t<Kind == sycl::usm::alloc::shared,
+                                              Kokkos::Experimental::SYCLSharedUSMSpace,
+                                              Kokkos::Experimental::SYCLHostUSMSpace>>;
 
     // This will memcpy an object T into memory held by this object
     // returns: a T* to that object
@@ -253,10 +255,10 @@ class SYCLInternal {
   // An indirect kernel is one where the functor to be executed is explicitly
   // copied to USM device memory before being executed, to get around the
   // trivially copyable limitation of SYCL.
-  using IndirectKernelMem = USMObjectMem<sycl::usm::alloc::shared>;
+  using IndirectKernelMem = USMObjectMem<sycl::usm::alloc::host>;
   IndirectKernelMem m_indirectKernelMem;
 
-  using IndirectReducerMem = USMObjectMem<sycl::usm::alloc::shared>;
+  using IndirectReducerMem = USMObjectMem<sycl::usm::alloc::host>;
   IndirectReducerMem m_indirectReducerMem;
 
   bool was_finalized = false;
