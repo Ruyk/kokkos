@@ -56,73 +56,22 @@
 /*--------------------------------------------------------------------------*/
 namespace Kokkos {
 namespace Impl {
-namespace {
-auto USM_memcpy(sycl::queue& q, void* dst, const void* src, size_t n) {
-  return q.memcpy(dst, src, n);
+
+void DeepCopySYCL(void* dst, const void* src, size_t n) {
+  Experimental::SYCL().fence("Kokkos::Impl::DeepCopySYCL: fence before memcpy");
+  Experimental::Impl::SYCLInternal::singleton().m_queue->memcpy(dst, src, n);
+  Experimental::SYCL().fence("Kokkos::Impl::DeepCopySYCL: fence after memcpy");
 }
 
-void USM_memcpy(Kokkos::Experimental::Impl::SYCLInternal& space, void* dst,
-                const void* src, size_t n) {
-  (void)USM_memcpy(*space.m_queue, dst, src, n);
+void DeepCopyAsyncSYCL(const Kokkos::Experimental::SYCL& instance, void* dst,
+                       const void* src, size_t n) {
+  instance.impl_internal_space_instance()->m_queue->memcpy(dst, src, n);
 }
 
-void USM_memcpy(void* dst, const void* src, size_t n) {
-  Experimental::SYCL().fence();
-  auto event = USM_memcpy(
-      *Experimental::Impl::SYCLInternal::singleton().m_queue, dst, src, n);
-  Experimental::Impl::SYCLInternal::fence(event);
-}
-}  // namespace
-
-
-//======================Device-Device==================================
-//DDS
-DeepCopy<Kokkos::Experimental::SYCLDeviceUSMSpace,
-         Kokkos::Experimental::SYCLDeviceUSMSpace, Kokkos::Experimental::SYCL>::
-    DeepCopy(const Kokkos::Experimental::SYCL& instance, void* dst,
-             const void* src, size_t n) {
-  USM_memcpy(*instance.impl_internal_space_instance(), dst, src, n);
-}
-
-DeepCopy<Kokkos::Experimental::SYCLDeviceUSMSpace,
-         Kokkos::Experimental::SYCLDeviceUSMSpace,
-         Kokkos::Experimental::SYCL>::DeepCopy(void* dst, const void* src,
-                                               size_t n) {
-  USM_memcpy(dst, src, n);
-}
-
-
-//=======================Host-Device===================================
-//HDS
-DeepCopy<Kokkos::HostSpace, Kokkos::Experimental::SYCLDeviceUSMSpace,
-         Kokkos::Experimental::SYCL>::DeepCopy(const Kokkos::Experimental::SYCL&
-                                                   instance,
-                                               void* dst, const void* src,
-                                               size_t n) {
-  USM_memcpy(*instance.impl_internal_space_instance(), dst, src, n);
-}
-
-DeepCopy<Kokkos::HostSpace, Kokkos::Experimental::SYCLDeviceUSMSpace,
-         Kokkos::Experimental::SYCL>::DeepCopy(void* dst, const void* src,
-                                               size_t n) {
-  USM_memcpy(dst, src, n);
-}
-
-
-//=======================Device-Host===================================
-//DHS
-DeepCopy<Kokkos::Experimental::SYCLDeviceUSMSpace, Kokkos::HostSpace,
-         Kokkos::Experimental::SYCL>::DeepCopy(const Kokkos::Experimental::SYCL&
-                                                   instance,
-                                               void* dst, const void* src,
-                                               size_t n) {
-  USM_memcpy(*instance.impl_internal_space_instance(), dst, src, n);
-}
-
-DeepCopy<Kokkos::Experimental::SYCLDeviceUSMSpace, Kokkos::HostSpace,
-         Kokkos::Experimental::SYCL>::DeepCopy(void* dst, const void* src,
-                                               size_t n) {
-  USM_memcpy(dst, src, n);
+void DeepCopyAsyncSYCL(void* dst, const void* src, size_t n) {
+  Experimental::Impl::SYCLInternal::singleton().m_queue->memcpy(dst, src, n);
+  Experimental::SYCL().fence(
+      "Kokkos::Impl::DeepCopyAsyncSYCL: fence after memcpy");
 }
 
 }  // namespace Impl
@@ -202,8 +151,8 @@ void* SYCLHostUSMSpace::allocate(const size_t arg_alloc_size) const {
   return allocate("[unlabeled]", arg_alloc_size);
 }
 void* SYCLHostUSMSpace::allocate(const char* arg_label,
-                                   const size_t arg_alloc_size,
-                                   const size_t arg_logical_size) const {
+                                 const size_t arg_alloc_size,
+                                 const size_t arg_logical_size) const {
   return allocate_sycl(
       arg_label, arg_alloc_size, arg_logical_size,
       Kokkos::Tools::make_space_handle(name()),
@@ -222,7 +171,8 @@ void sycl_deallocate(const char* arg_label, void* const arg_alloc_ptr,
                                       reported_size);
   }
 
-  SYCL::impl_static_fence();
+  SYCL::impl_static_fence(
+      "Kokkos::Impl::sycl_deallocate: fence before deallocate");
   sycl::free(arg_alloc_ptr, queue);
 }
 
@@ -251,16 +201,15 @@ void SYCLSharedUSMSpace::deallocate(const char* arg_label,
                   Kokkos::Tools::make_space_handle(name()), m_queue);
 }
 
-
 void SYCLHostUSMSpace::deallocate(void* const arg_alloc_ptr,
-                                    const size_t arg_alloc_size) const {
+                                  const size_t arg_alloc_size) const {
   deallocate("[unlabeled]", arg_alloc_ptr, arg_alloc_size);
 }
 
 void SYCLHostUSMSpace::deallocate(const char* arg_label,
-                                    void* const arg_alloc_ptr,
-                                    const size_t arg_alloc_size,
-                                    const size_t arg_logical_size) const {
+                                  void* const arg_alloc_ptr,
+                                  const size_t arg_alloc_size,
+                                  const size_t arg_logical_size) const {
   sycl_deallocate(arg_label, arg_alloc_ptr, arg_alloc_size, arg_logical_size,
                   Kokkos::Tools::make_space_handle(name()), m_queue);
 }
@@ -326,7 +275,6 @@ SharedAllocationRecord<Kokkos::Experimental::SYCLSharedUSMSpace, void>::
   this->base_t::_fill_host_accessible_header_info(*base_t::m_alloc_ptr,
                                                   arg_label);
 }
-
 
 SharedAllocationRecord<Kokkos::Experimental::SYCLHostUSMSpace, void>::
     SharedAllocationRecord(
