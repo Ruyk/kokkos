@@ -106,7 +106,7 @@ class SerialInternal {
 ///
 /// A "device" represents a parallel execution model.  It tells Kokkos
 /// how to parallelize the execution of kernels in a parallel_for or
-/// parallel_reduce.  For example, the Threads device uses Pthreads or
+/// parallel_reduce.  For example, the Threads device uses
 /// C++11 threads on a CPU, the OpenMP device uses the OpenMP language
 /// extensions, and the Cuda device uses NVIDIA's CUDA programming
 /// model.  The Serial device executes "parallel" kernels
@@ -151,9 +151,26 @@ class Serial {
   /// return asynchronously, before the functor completes.  This
   /// method does not return until all dispatched functors on this
   /// device have completed.
-  static void impl_static_fence() {}
+  static void impl_static_fence() {
+    impl_static_fence(
+        "Kokkos::Serial::impl_static_fence: Unnamed Static Fence");
+  }
+  static void impl_static_fence(const std::string& name) {
+    Kokkos::Tools::Experimental::Impl::profile_fence_event<Kokkos::Serial>(
+        name,
+        Kokkos::Tools::Experimental::SpecialSynchronizationCases::
+            GlobalDeviceSynchronization,
+        []() {});  // TODO: correct device ID
+    Kokkos::memory_fence();
+  }
 
-  void fence() const {}
+  void fence() const { fence("Kokkos::Serial::fence: Unnamed Instance Fence"); }
+  void fence(const std::string& name) const {
+    Kokkos::Tools::Experimental::Impl::profile_fence_event<Kokkos::Serial>(
+        name, Kokkos::Tools::Experimental::Impl::DirectFenceIDHandle{1},
+        []() {});  // TODO: correct device ID
+    Kokkos::memory_fence();
+  }
 
   /** \brief  Return the maximum amount of concurrency.  */
   static int concurrency() { return 1; }
@@ -183,7 +200,7 @@ class Serial {
     return impl_thread_pool_size(0);
   }
 
-  uint32_t impl_instance_id() const noexcept { return 0; }
+  uint32_t impl_instance_id() const noexcept { return 1; }
 
   static const char* name();
 
@@ -214,6 +231,7 @@ class SerialSpaceInitializer : public ExecSpaceInitializerBase {
   void initialize(const InitArguments& args) final;
   void finalize(const bool) final;
   void fence() final;
+  void fence(const std::string&) final;
   void print_configuration(std::ostream& msg, const bool detail) final;
 };
 

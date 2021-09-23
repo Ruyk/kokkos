@@ -42,5 +42,8 @@
 //@HEADER
 */
 
-#include <TestHIPHostPinned_Category.hpp>
-#include <TestViewAPI_d.hpp>
+#include <iostream>
+#include "Kokkos_Core.hpp"
+
+#include <tools/TestEventCorrectness.hpp>
+#include "../UnitTestMainInit.cpp"

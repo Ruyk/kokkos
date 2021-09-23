@@ -47,6 +47,7 @@
 #include <string>
 #include <Kokkos_Parallel.hpp>
 #include <KokkosExp_MDRangePolicy.hpp>
+#include <Kokkos_Layout.hpp>
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
@@ -1252,22 +1253,6 @@ struct ViewRemap<DstType, SrcType, ExecSpace, 8> {
   }
 };
 
-template <typename T>
-bool is_zero_byte(const T& t) {
-  using comparison_type = std::conditional_t<
-      sizeof(T) % sizeof(long long int) == 0, long long int,
-      std::conditional_t<
-          sizeof(T) % sizeof(long int) == 0, long int,
-          std::conditional_t<
-              sizeof(T) % sizeof(int) == 0, int,
-              std::conditional_t<sizeof(T) % sizeof(short int) == 0, short int,
-                                 char>>>>;
-  const auto* const ptr = reinterpret_cast<const comparison_type*>(&t);
-  for (std::size_t i = 0; i < sizeof(T) / sizeof(comparison_type); ++i)
-    if (ptr[i] != 0) return false;
-  return true;
-}
-
 template <typename ExecutionSpace, class DT, class... DP>
 inline void contiguous_fill(
     const ExecutionSpace& exec_space, const View<DT, DP...>& dst,
@@ -1382,14 +1367,15 @@ inline void deep_copy(
   }
 
   if (dst.data() == nullptr) {
-    Kokkos::fence();
+    Kokkos::fence(
+        "Kokkos::deep_copy: scalar copy, fence because destination is null");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
     return;
   }
 
-  Kokkos::fence();
+  Kokkos::fence("Kokkos::deep_copy: scalar copy, pre copy fence");
   static_assert(std::is_same<typename ViewType::non_const_value_type,
                              typename ViewType::value_type>::value,
                 "deep_copy requires non-const type");
@@ -1397,7 +1383,7 @@ inline void deep_copy(
   // If contiguous we can simply do a 1D flat loop or use memset
   if (dst.span_is_contiguous()) {
     Impl::contiguous_fill_or_memset(dst, value);
-    Kokkos::fence();
+    Kokkos::fence("Kokkos::deep_copy: scalar copy, post copy fence");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
@@ -1452,7 +1438,7 @@ inline void deep_copy(
                              exec_space_type, ViewType::Rank, int>(
           dst, value, exec_space_type());
   }
-  Kokkos::fence();
+  Kokkos::fence("Kokkos::deep_copy: scalar copy, post copy fence");
 
   if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
     Kokkos::Profiling::endDeepCopy();
@@ -1483,7 +1469,7 @@ inline void deep_copy(
   }
 
   if (src.data() == nullptr) {
-    Kokkos::fence();
+    Kokkos::fence("Kokkos::deep_copy: copy into scalar, src is null");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
@@ -1529,18 +1515,19 @@ inline void deep_copy(
   }
 
   if (dst.data() == nullptr && src.data() == nullptr) {
-    Kokkos::fence();
+    Kokkos::fence(
+        "Kokkos::deep_copy: scalar to scalar copy, both pointers null");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
     return;
   }
 
-  Kokkos::fence();
+  Kokkos::fence("Kokkos::deep_copy: scalar to scalar copy, pre copy fence");
   if (dst.data() != src.data()) {
     Kokkos::Impl::DeepCopy<dst_memory_space, src_memory_space>(
         dst.data(), src.data(), sizeof(value_type));
-    Kokkos::fence();
+    Kokkos::fence("Kokkos::deep_copy: scalar to scalar copy, post copy fence");
   }
   if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
     Kokkos::Profiling::endDeepCopy();
@@ -1612,7 +1599,9 @@ inline void deep_copy(
 
       Kokkos::Impl::throw_runtime_exception(message);
     }
-    Kokkos::fence();
+    Kokkos::fence(
+        "Kokkos::deep_copy: copy between contiguous views, fence due to null "
+        "argument");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
@@ -1639,7 +1628,9 @@ inline void deep_copy(
   if (((std::ptrdiff_t)dst_start == (std::ptrdiff_t)src_start) &&
       ((std::ptrdiff_t)dst_end == (std::ptrdiff_t)src_end) &&
       (dst.span_is_contiguous() && src.span_is_contiguous())) {
-    Kokkos::fence();
+    Kokkos::fence(
+        "Kokkos::deep_copy: copy between contiguous views, fence due to same "
+        "spans");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
@@ -1710,16 +1701,22 @@ inline void deep_copy(
       ((dst_type::rank < 7) || (dst.stride_6() == src.stride_6())) &&
       ((dst_type::rank < 8) || (dst.stride_7() == src.stride_7()))) {
     const size_t nbytes = sizeof(typename dst_type::value_type) * dst.span();
-    Kokkos::fence();
+    Kokkos::fence(
+        "Kokkos::deep_copy: copy between contiguous views, pre view equality "
+        "check");
     if ((void*)dst.data() != (void*)src.data()) {
       Kokkos::Impl::DeepCopy<dst_memory_space, src_memory_space>(
           dst.data(), src.data(), nbytes);
-      Kokkos::fence();
+      Kokkos::fence(
+          "Kokkos::deep_copy: copy between contiguous views, post deep copy "
+          "fence");
     }
   } else {
-    Kokkos::fence();
+    Kokkos::fence(
+        "Kokkos::deep_copy: copy between contiguous views, pre copy fence");
     Impl::view_copy(dst, src);
-    Kokkos::fence();
+    Kokkos::fence(
+        "Kokkos::deep_copy: copy between contiguous views, post copy fence");
   }
   if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
     Kokkos::Profiling::endDeepCopy();
@@ -2527,7 +2524,7 @@ inline void deep_copy(
         "(none)", &value, dst.span() * sizeof(typename dst_traits::value_type));
   }
   if (dst.data() == nullptr) {
-    space.fence();
+    space.fence("Kokkos::deep_copy: scalar copy on space, dst data is null");
   } else if (dst.span_is_contiguous()) {
     Impl::contiguous_fill_or_memset(space, dst, value);
   } else {
@@ -2569,9 +2566,10 @@ inline void deep_copy(
         "(none)", &value, dst.span() * sizeof(typename dst_traits::value_type));
   }
   if (dst.data() == nullptr) {
-    space.fence();
+    space.fence(
+        "Kokkos::deep_copy: scalar-to-view copy on space, dst data is null");
   } else {
-    space.fence();
+    space.fence("Kokkos::deep_copy: scalar-to-view copy on space, pre copy");
     using fill_exec_space = typename dst_traits::memory_space::execution_space;
     if (dst.span_is_contiguous()) {
       Impl::contiguous_fill_or_memset(fill_exec_space(), dst, value);
@@ -2583,7 +2581,8 @@ inline void deep_copy(
       Kokkos::Impl::ViewFill<ViewTypeUniform, typename dst_traits::array_layout,
                              fill_exec_space>(dst, value, fill_exec_space());
     }
-    fill_exec_space().fence();
+    fill_exec_space().fence(
+        "Kokkos::deep_copy: scalar-to-view copy on space, fence after fill");
   }
   if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
     Kokkos::Profiling::endDeepCopy();
@@ -2613,7 +2612,8 @@ inline void deep_copy(
   }
 
   if (src.data() == nullptr) {
-    exec_space.fence();
+    exec_space.fence(
+        "Kokkos::deep_copy: view-to-scalar copy on space, src data is null");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
@@ -2658,7 +2658,8 @@ inline void deep_copy(
   }
 
   if (dst.data() == nullptr && src.data() == nullptr) {
-    exec_space.fence();
+    exec_space.fence(
+        "Kokkos::deep_copy: view-to-view copy on space, data is null");
     if (Kokkos::Tools::Experimental::get_callbacks().end_deep_copy != nullptr) {
       Kokkos::Profiling::endDeepCopy();
     }
@@ -2851,9 +2852,13 @@ inline void deep_copy(
       using cpy_exec_space =
           typename std::conditional<DstExecCanAccessSrc, dst_execution_space,
                                     src_execution_space>::type;
-      exec_space.fence();
+      exec_space.fence(
+          "Kokkos::deep_copy: view-to-view noncontiguous copy on space, pre "
+          "copy");
       Impl::view_copy(cpy_exec_space(), dst, src);
-      cpy_exec_space().fence();
+      cpy_exec_space().fence(
+          "Kokkos::deep_copy: view-to-view noncontiguous copy on space, post "
+          "copy");
     } else {
       Kokkos::Impl::throw_runtime_exception(
           "deep_copy given views that would require a temporary allocation");
@@ -2870,6 +2875,19 @@ inline void deep_copy(
 //----------------------------------------------------------------------------
 
 namespace Kokkos {
+
+namespace Impl {
+template <typename ViewType>
+bool size_mismatch(const ViewType& view, unsigned int max_extent,
+                   const size_t new_extents[8]) {
+  for (unsigned int dim = 0; dim < max_extent; ++dim)
+    if (new_extents[dim] != view.extent(dim)) {
+      return true;
+    }
+  return false;
+}
+
+}  // namespace Impl
 
 /** \brief  Resize a view with copying old data to new data at the corresponding
  * indices. */
@@ -2892,67 +2910,6 @@ resize(Kokkos::View<T, P...>& v, const size_t n0 = KOKKOS_IMPL_CTOR_DEFAULT_ARG,
   static_assert(Kokkos::ViewTraits<T, P...>::is_managed,
                 "Can only resize managed views");
 
-  // Fix #904 by checking dimensions before actually resizing.
-  //
-  // Rank is known at compile time, so hopefully the compiler will
-  // remove branches that are compile-time false.  The upcoming "if
-  // constexpr" language feature would make this certain.
-  if (view_type::Rank == 1 && n0 == static_cast<size_t>(v.extent(0))) {
-    return;
-  }
-  if (view_type::Rank == 2 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1))) {
-    return;
-  }
-  if (view_type::Rank == 3 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2))) {
-    return;
-  }
-  if (view_type::Rank == 4 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3))) {
-    return;
-  }
-  if (view_type::Rank == 5 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4))) {
-    return;
-  }
-  if (view_type::Rank == 6 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4)) &&
-      n5 == static_cast<size_t>(v.extent(5))) {
-    return;
-  }
-  if (view_type::Rank == 7 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4)) &&
-      n5 == static_cast<size_t>(v.extent(5)) &&
-      n6 == static_cast<size_t>(v.extent(6))) {
-    return;
-  }
-  if (view_type::Rank == 8 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4)) &&
-      n5 == static_cast<size_t>(v.extent(5)) &&
-      n6 == static_cast<size_t>(v.extent(6)) &&
-      n7 == static_cast<size_t>(v.extent(7))) {
-    return;
-  }
-  // If Kokkos ever supports Views of rank > 8, the above code won't
-  // be incorrect, because avoiding reallocation in resize() is just
-  // an optimization.
-
   // TODO (mfh 27 Jun 2017) If the old View has enough space but just
   // different dimensions (e.g., if the product of the dimensions,
   // including extra space for alignment, will not change), then
@@ -2960,11 +2917,17 @@ resize(Kokkos::View<T, P...>& v, const size_t n0 = KOKKOS_IMPL_CTOR_DEFAULT_ARG,
   // reallocates if any of the dimensions change, even if the old View
   // has enough space.
 
-  view_type v_resized(v.label(), n0, n1, n2, n3, n4, n5, n6, n7);
+  const size_t new_extents[8] = {n0, n1, n2, n3, n4, n5, n6, n7};
+  const bool sizeMismatch = Impl::size_mismatch(v, v.rank_dynamic, new_extents);
 
-  Kokkos::Impl::ViewRemap<view_type, view_type>(v_resized, v);
+  if (sizeMismatch) {
+    view_type v_resized(v.label(), n0, n1, n2, n3, n4, n5, n6, n7);
 
-  v = v_resized;
+    Kokkos::Impl::ViewRemap<view_type, view_type>(v_resized, v);
+    Kokkos::fence("Kokkos::resize(View)");
+
+    v = v_resized;
+  }
 }
 
 /** \brief  Resize a view with copying old data to new data at the corresponding
@@ -2989,67 +2952,6 @@ resize(const I& arg_prop, Kokkos::View<T, P...>& v,
   static_assert(Kokkos::ViewTraits<T, P...>::is_managed,
                 "Can only resize managed views");
 
-  // Fix #904 by checking dimensions before actually resizing.
-  //
-  // Rank is known at compile time, so hopefully the compiler will
-  // remove branches that are compile-time false.  The upcoming "if
-  // constexpr" language feature would make this certain.
-  if (view_type::Rank == 1 && n0 == static_cast<size_t>(v.extent(0))) {
-    return;
-  }
-  if (view_type::Rank == 2 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1))) {
-    return;
-  }
-  if (view_type::Rank == 3 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2))) {
-    return;
-  }
-  if (view_type::Rank == 4 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3))) {
-    return;
-  }
-  if (view_type::Rank == 5 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4))) {
-    return;
-  }
-  if (view_type::Rank == 6 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4)) &&
-      n5 == static_cast<size_t>(v.extent(5))) {
-    return;
-  }
-  if (view_type::Rank == 7 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4)) &&
-      n5 == static_cast<size_t>(v.extent(5)) &&
-      n6 == static_cast<size_t>(v.extent(6))) {
-    return;
-  }
-  if (view_type::Rank == 8 && n0 == static_cast<size_t>(v.extent(0)) &&
-      n1 == static_cast<size_t>(v.extent(1)) &&
-      n2 == static_cast<size_t>(v.extent(2)) &&
-      n3 == static_cast<size_t>(v.extent(3)) &&
-      n4 == static_cast<size_t>(v.extent(4)) &&
-      n5 == static_cast<size_t>(v.extent(5)) &&
-      n6 == static_cast<size_t>(v.extent(6)) &&
-      n7 == static_cast<size_t>(v.extent(7))) {
-    return;
-  }
-  // If Kokkos ever supports Views of rank > 8, the above code won't
-  // be incorrect, because avoiding reallocation in resize() is just
-  // an optimization.
-
   // TODO (mfh 27 Jun 2017) If the old View has enough space but just
   // different dimensions (e.g., if the product of the dimensions,
   // including extra space for alignment, will not change), then
@@ -3057,19 +2959,64 @@ resize(const I& arg_prop, Kokkos::View<T, P...>& v,
   // reallocates if any of the dimensions change, even if the old View
   // has enough space.
 
-  view_type v_resized(view_alloc(v.label(), std::forward<const I>(arg_prop)),
-                      n0, n1, n2, n3, n4, n5, n6, n7);
+  const size_t new_extents[8] = {n0, n1, n2, n3, n4, n5, n6, n7};
+  const bool sizeMismatch = Impl::size_mismatch(v, v.rank_dynamic, new_extents);
 
-  Kokkos::Impl::ViewRemap<view_type, view_type>(v_resized, v);
+  if (sizeMismatch) {
+    view_type v_resized(view_alloc(v.label(), std::forward<const I>(arg_prop)),
+                        n0, n1, n2, n3, n4, n5, n6, n7);
 
-  v = v_resized;
+    Kokkos::Impl::ViewRemap<view_type, view_type>(v_resized, v);
+    // This fence really ought to look for an execution space in
+    // arg_prop, and just fence that if there is one
+    Kokkos::fence("Kokkos::resize(View)");
+
+    v = v_resized;
+  }
 }
 
 /** \brief  Resize a view with copying old data to new data at the corresponding
  * indices. */
 template <class T, class... P>
-inline void resize(Kokkos::View<T, P...>& v,
-                   const typename Kokkos::View<T, P...>::array_layout& layout) {
+inline std::enable_if_t<
+    std::is_same<typename Kokkos::View<T, P...>::array_layout,
+                 Kokkos::LayoutLeft>::value ||
+    std::is_same<typename Kokkos::View<T, P...>::array_layout,
+                 Kokkos::LayoutRight>::value ||
+    std::is_same<typename Kokkos::View<T, P...>::array_layout,
+                 Kokkos::LayoutStride>::value ||
+    is_layouttiled<typename Kokkos::View<T, P...>::array_layout>::value>
+resize(Kokkos::View<T, P...>& v,
+       const typename Kokkos::View<T, P...>::array_layout& layout) {
+  using view_type = Kokkos::View<T, P...>;
+
+  static_assert(Kokkos::ViewTraits<T, P...>::is_managed,
+                "Can only resize managed views");
+
+  if (v.layout() != layout) {
+    view_type v_resized(v.label(), layout);
+
+    Kokkos::Impl::ViewRemap<view_type, view_type>(v_resized, v);
+    Kokkos::fence("Kokkos::resize(View)");
+
+    v = v_resized;
+  }
+}
+
+// FIXME User-provided (custom) layouts are not required to have a comparison
+// operator. Hence, there is no way to check if the requested layout is actually
+// the same as the existing one.
+template <class T, class... P>
+inline std::enable_if_t<
+    !(std::is_same<typename Kokkos::View<T, P...>::array_layout,
+                   Kokkos::LayoutLeft>::value ||
+      std::is_same<typename Kokkos::View<T, P...>::array_layout,
+                   Kokkos::LayoutRight>::value ||
+      std::is_same<typename Kokkos::View<T, P...>::array_layout,
+                   Kokkos::LayoutStride>::value ||
+      is_layouttiled<typename Kokkos::View<T, P...>::array_layout>::value)>
+resize(Kokkos::View<T, P...>& v,
+       const typename Kokkos::View<T, P...>::array_layout& layout) {
   using view_type = Kokkos::View<T, P...>;
 
   static_assert(Kokkos::ViewTraits<T, P...>::is_managed,
@@ -3103,10 +3050,16 @@ realloc(Kokkos::View<T, P...>& v,
   static_assert(Kokkos::ViewTraits<T, P...>::is_managed,
                 "Can only realloc managed views");
 
-  const std::string label = v.label();
+  const size_t new_extents[8] = {n0, n1, n2, n3, n4, n5, n6, n7};
+  const bool sizeMismatch = Impl::size_mismatch(v, v.rank_dynamic, new_extents);
 
-  v = view_type();  // Deallocate first, if the only view to allocation
-  v = view_type(label, n0, n1, n2, n3, n4, n5, n6, n7);
+  if (sizeMismatch) {
+    const std::string label = v.label();
+
+    v = view_type();  // Deallocate first, if the only view to allocation
+    v = view_type(label, n0, n1, n2, n3, n4, n5, n6, n7);
+  } else
+    Kokkos::deep_copy(v, typename view_type::value_type{});
 }
 
 /** \brief  Resize a view with discarding old data. */
@@ -3303,7 +3256,8 @@ create_mirror_view_and_copy(
         Impl::MirrorViewType<Space, T, P...>::is_same_memspace>::type* =
         nullptr) {
   (void)name;
-  fence();  // same behavior as deep_copy(src, src)
+  fence(
+      "Kokkos::create_mirror_view_and_copy: fence before returning src view");  // same behavior as deep_copy(src, src)
   return src;
 }
 

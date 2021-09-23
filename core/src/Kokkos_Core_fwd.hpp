@@ -240,7 +240,8 @@ class LogicalMemorySpace;
 
 namespace Kokkos {
 void fence();
-}
+void fence(const std::string &);
+}  // namespace Kokkos
 
 //----------------------------------------------------------------------------
 
@@ -252,7 +253,8 @@ class View;
 namespace Impl {
 
 template <class DstSpace, class SrcSpace,
-          class ExecutionSpace = typename DstSpace::execution_space>
+          class ExecutionSpace = typename DstSpace::execution_space,
+          class Enable         = void>
 struct DeepCopy;
 
 template <typename ExecutionSpace, class DT, class... DP>
