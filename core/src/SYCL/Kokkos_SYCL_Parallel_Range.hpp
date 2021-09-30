@@ -57,9 +57,10 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
   using Policy = Kokkos::RangePolicy<Traits...>;
 
 
-  // template <typename... Args>
+  // TODO should this be defined elsewhere for others to use it?
+  // TODO if so, WorkTag needs to be a member
   template <typename Functor>
-  class myTestFunctor {
+  class RangeRoundedFunctor {
    public:
     void operator() (sycl::nd_item<1> item) const {
       const typename Policy::index_type id =
@@ -72,7 +73,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
       }
     }
 
-    myTestFunctor(int begin_in, int end_in, Functor functor_in)
+    RangeRoundedFunctor(int begin_in, int end_in, Functor functor_in)
       :  begin(begin_in), end(end_in), functor(functor_in) {}
 
    private:
@@ -98,24 +99,27 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
         *space.impl_internal_space_instance();
     sycl::queue& q = *instance.m_queue;
 
+    // TODO  don't pass queue to itself...
     auto parallel_for_event = q.submit([functor, policy, q](sycl::handler& cgh) {
 
       const auto begin = policy.begin();
       const auto end   = policy.end();
 
+      // Here to...
       const sycl::device sycl_device = q.get_device();
       sycl::program p{q.get_context()};
 
-      p.build_with_kernel_type<myTestFunctor<Functor>>();
-      auto k = p.get_kernel<myTestFunctor<Functor>>();
+      p.build_with_kernel_type<RangeRoundedFunctor<Functor>>();
+      auto k = p.get_kernel<RangeRoundedFunctor<Functor>>();
 
       auto num_regs = k.template get_info<
-          sycl::info::kernel_device_specific::num_regs>(sycl_device);
+          sycl::info::kernel_device_specific::ext_codeplay_num_regs>(sycl_device);
 
+      // TODO - are we actually computing the wrong num regs here by computing
+      // for the unwrapped kernel?
       auto group_size_select =
-          sycl_get_opt_block_size<FunctorType, LaunchBounds>(q, functor,
-                                                             num_regs);
-      // auto group_size_select = 32;
+          sycl_get_opt_block_size<Functor, LaunchBounds>(q, functor, num_regs);
+      // .. here ought to go inside sycl_get_opt_block_size
 
       auto global_size = policy.end() - policy.begin();
       auto group_size = group_size_select;
@@ -125,7 +129,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
       const sycl::nd_range<1>
           range{sycl::range<1>(infl_global_size), sycl::range<1>(group_size)};
 
-      myTestFunctor<Functor> fn(begin, end, functor);
+      RangeRoundedFunctor<Functor> fn(begin, end, functor);
       cgh.parallel_for(range, fn);
 
     });
