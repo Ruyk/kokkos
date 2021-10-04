@@ -105,21 +105,11 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
       const auto begin = policy.begin();
       const auto end   = policy.end();
 
-      // Here to...
-      const sycl::device sycl_device = q.get_device();
-      sycl::program p{q.get_context()};
-
-      p.build_with_kernel_type<RangeRoundedFunctor<Functor>>();
-      auto k = p.get_kernel<RangeRoundedFunctor<Functor>>();
-
-      auto num_regs = k.template get_info<
-          sycl::info::kernel_device_specific::ext_codeplay_num_regs>(sycl_device);
-
       // TODO - are we actually computing the wrong num regs here by computing
       // for the unwrapped kernel?
       auto group_size_select =
-          sycl_get_opt_block_size<Functor, LaunchBounds>(q, functor, num_regs);
-      // .. here ought to go inside sycl_get_opt_block_size
+          sycl_get_opt_block_size<Functor, LaunchBounds, RangeRoundedFunctor>(
+              q, functor, 1, 0, 0);
 
       auto global_size = policy.end() - policy.begin();
       auto group_size = group_size_select;
