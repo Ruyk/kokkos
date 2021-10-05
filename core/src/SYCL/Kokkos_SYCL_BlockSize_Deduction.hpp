@@ -128,7 +128,7 @@ inline int sycl_deduce_block_size(bool early_termination,
   assert(max_threads_per_block % wg_size_multiple == 0);
 
   for (int block_size = max_threads_per_block; block_size > 0;
-       wg_size_multiple -= 32) {
+       block_size -= wg_size_multiple) {
 
     // 'dynamic_shmem' is a misnomer here. It's allocated before launch by
     // the host & it's sycl 'local' memory.
