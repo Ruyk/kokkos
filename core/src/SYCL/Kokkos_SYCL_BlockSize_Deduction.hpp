@@ -53,40 +53,32 @@
 namespace Kokkos {
 namespace Impl {
 
-// Note: hardcoded for Compute 8.0
-// https://docs.nvidia.com/cuda/ampere-tuning-guide/index.html
 inline int sycl_max_active_blocks_per_sm(int block_size, size_t dynamic_shmem, const int regs_per_thread) {
-  // Limits due do registers/SM
-  // int const regs_per_sm = properties.regsPerMultiprocessor;
+
+// https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities
+#if defined(KOKKOS_ARCH_AMPERE80)
   int const regs_per_sm     = 65536;
+  size_t const shmem_per_sm = 167936;
+  size_t const shmem_per_block = 49152;
+  int const max_blocks_per_sm = 32;
+#else
+  // TODO other arches
+#endif
+
+  // Limits due to registers/SM
   int const max_blocks_regs = regs_per_sm / (regs_per_thread * block_size);
 
-  // Limits due to shared memory/SM
-  // size_t const shmem_per_sm            =
-  // properties.sharedMemPerMultiprocessor; size_t const shmem_per_block =
-  // properties.sharedMemPerBlock;
-  size_t const shmem_per_sm            = 167936;
-  size_t const shmem_per_block         = 167936;
-
-  // size_t const static_shmem            = attributes.sharedSizeBytes;
-  // size_t const dynamic_shmem_per_block = attributes.maxDynamicSharedSizeBytes;
-  size_t const static_shmem            = 0;
-  size_t const dynamic_shmem_per_block = 0;
-
-
-  size_t const total_shmem             = static_shmem + dynamic_shmem;
-
   int const max_blocks_shmem =
-      total_shmem > shmem_per_block || dynamic_shmem > dynamic_shmem_per_block
+      dynamic_shmem > shmem_per_block
           ? 0
-          : (total_shmem > 0 ? (int)shmem_per_sm / total_shmem
+          : (dynamic_shmem > 0 ? (int)shmem_per_sm / dynamic_shmem
                              : max_blocks_regs);
 
   // Overall occupancy in blocks
   return std::min({max_blocks_regs, max_blocks_shmem, max_blocks_per_sm});
 }
 
-
+// Implemented for sycl cuda backend only
 template <typename UnaryFunction, typename FunctorType, typename LaunchBounds, template <typename> class Wrapper>
 inline int sycl_deduce_block_size(bool early_termination,
 				  const sycl::queue& q,
@@ -94,25 +86,26 @@ inline int sycl_deduce_block_size(bool early_termination,
                                   UnaryFunction block_size_to_dynamic_shmem,
                                   LaunchBounds) {
 
-  // TODO:
-  // TODO maxThreadsPerMultiProcessor
-  // TODO max_active_blocks_per_sm
-
-  // Get the device & compiled kernel
+  // Get the device & check backend
   const sycl::device sycl_device = q.get_device();
+  KOKKOS_ASSERT(sycl_device.get_backend() == sycl::backend::cuda);
+
+  // Get the compiled kernel to query register & memory usage
   sycl::program p{q.get_context()};
   p.build_with_kernel_type<Wrapper<FunctorType>>();
   auto k = p.get_kernel<Wrapper<FunctorType>>();
 
-  // Get device-specific kernel info (number of registers & max work group size)
   auto num_regs = k.template get_info<
       sycl::info::kernel_device_specific::ext_codeplay_num_regs>(sycl_device);
 
   size_t kernelMaxThreadsPerBlock = k.template get_info<
       sycl::info::kernel_device_specific::work_group_size>(sycl_device);
 
-  // Limits
-  int const max_threads_per_sm = 2048; //dQ
+#if defined(KOKKOS_ARCH_AMPERE80)
+  int const max_threads_per_sm = 2048;
+#else
+  // TODO other arches
+#endif
 
   int const device_max_threads_per_block =
     sycl_device.template get_info<sycl::info::device::max_work_group_size>();
@@ -129,16 +122,18 @@ inline int sycl_deduce_block_size(bool early_termination,
   int opt_block_size     = 0;
   int opt_threads_per_sm = 0;
 
-  // TODO generalise 32?
-  // info::kernel_device_specific::preferred_work_group_size_multiple
+  size_t wg_size_multiple = k.template get_info<
+      sycl::info::kernel_device_specific::preferred_work_group_size_multiple>(sycl_device);
+
+  assert(max_threads_per_block % wg_size_multiple == 0);
+
   for (int block_size = max_threads_per_block; block_size > 0;
-       block_size -= 32) {
+       wg_size_multiple -= 32) {
 
     // 'dynamic_shmem' is a misnomer here. It's allocated before launch by
     // the host & it's sycl 'local' memory.
     size_t const dynamic_shmem = block_size_to_dynamic_shmem(block_size);
 
-    // TODO max_active_blocks_per_sm
     int blocks_per_sm = sycl_max_active_blocks_per_sm(
         block_size, dynamic_shmem, num_regs);
 
@@ -172,6 +167,10 @@ int sycl_get_opt_block_size(const sycl::queue& q, const FunctorType& f,
   // auto const& prop = Kokkos::Cuda().cuda_device_prop();
   // i.e. device info caching.
 
+  // The shared memory here is that which is explicitly allocated by Kokkos
+  // for either team operations or because of an explicit user request (functor_shmem).
+  // SYCL kernels cannot directly request shared (AKA local) memory. This can be achieved
+  // via local_accessors but a Kokkos kernel can't create those.
   auto const block_size_to_dynamic_shmem = [&f, vector_length, shmem_block,
                                             shmem_thread](int block_size) {
     size_t const functor_shmem =
