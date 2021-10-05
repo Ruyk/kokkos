@@ -82,31 +82,8 @@ inline int sycl_max_active_blocks_per_sm(int block_size, size_t dynamic_shmem, c
           : (total_shmem > 0 ? (int)shmem_per_sm / total_shmem
                              : max_blocks_regs);
 
-  // Limits due to blocks/SM
-// #if CUDA_VERSION >= 11000
-  // int const max_blocks_per_sm = properties.maxBlocksPerMultiProcessor;
-  int const max_blocks_per_sm = 32;
-// #else
-//   int const max_blocks_per_sm = [&properties]() {
-//     switch (properties.major) {
-//       case 3: return 16;
-//       case 5:
-//       case 6: return 32;
-//       case 7: {
-//         int isTuring = properties.minor == 5;
-//         return (isTuring) ? 16 : 32;
-//       }
-//       default:
-//         throw_runtime_exception("Unknown device in cuda block size deduction");
-//         return 0;
-//     }
-//   }();
-// #endif
-
   // Overall occupancy in blocks
   return std::min({max_blocks_regs, max_blocks_shmem, max_blocks_per_sm});
-
- // TODO this is returning zero
 }
 
 
@@ -114,8 +91,6 @@ template <typename UnaryFunction, typename FunctorType, typename LaunchBounds, t
 inline int sycl_deduce_block_size(bool early_termination,
 				  const sycl::queue& q,
 				  const FunctorType& f,
-                                  // cudaDeviceProp const& properties,
-                                  // cudaFuncAttributes const& attributes,
                                   UnaryFunction block_size_to_dynamic_shmem,
                                   LaunchBounds) {
 
@@ -139,9 +114,8 @@ inline int sycl_deduce_block_size(bool early_termination,
   // Limits
   int const max_threads_per_sm = 2048; //dQ
 
-  // int const num_SM = sycl_device.template get_info<sycl::info::device::max_compute_units>();
   int const device_max_threads_per_block =
-    sycl_device.template get_info<sycl::info::device::max_work_group_size>(); // works!
+    sycl_device.template get_info<sycl::info::device::max_work_group_size>();
 
   int const max_threads_per_block =
       std::min(LaunchBounds::maxTperB == 0 ? (int)device_max_threads_per_block
@@ -155,8 +129,13 @@ inline int sycl_deduce_block_size(bool early_termination,
   int opt_block_size     = 0;
   int opt_threads_per_sm = 0;
 
+  // TODO generalise 32?
+  // info::kernel_device_specific::preferred_work_group_size_multiple
   for (int block_size = max_threads_per_block; block_size > 0;
        block_size -= 32) {
+
+    // 'dynamic_shmem' is a misnomer here. It's allocated before launch by
+    // the host & it's sycl 'local' memory.
     size_t const dynamic_shmem = block_size_to_dynamic_shmem(block_size);
 
     // TODO max_active_blocks_per_sm
@@ -164,7 +143,6 @@ inline int sycl_deduce_block_size(bool early_termination,
         block_size, dynamic_shmem, num_regs);
 
     int threads_per_sm = blocks_per_sm * block_size;
-
     if (threads_per_sm > max_threads_per_sm) {
       blocks_per_sm  = max_threads_per_sm / block_size;
       threads_per_sm = blocks_per_sm * block_size;
@@ -183,59 +161,6 @@ inline int sycl_deduce_block_size(bool early_termination,
   return opt_block_size;
 }
 
-
-// template <class FunctorType, class LaunchBounds>
-// int cuda_get_max_block_size(const CudaInternal* cuda_instance,
-//                             const cudaFuncAttributes& attr,
-//                             const FunctorType& f, const size_t vector_length,
-//                             const size_t shmem_block,
-//                             const size_t shmem_thread) {
-//   (void)cuda_instance;
-
-//   auto const& prop = Kokkos::Cuda().cuda_device_prop();
-
-//   auto const block_size_to_dynamic_shmem = [&f, vector_length, shmem_block,
-//                                             shmem_thread](int block_size) {
-//     size_t const functor_shmem =
-//         Kokkos::Impl::FunctorTeamShmemSize<FunctorType>::value(
-//             f, block_size / vector_length);
-
-//     size_t const dynamic_shmem = shmem_block +
-//                                  shmem_thread * (block_size / vector_length) +
-//                                  functor_shmem;
-//     return dynamic_shmem;
-//   };
-
-//   return cuda_deduce_block_size(true, prop, attr, block_size_to_dynamic_shmem,
-//                                 LaunchBounds{});
-// }
-
-// template <class FunctorType, class LaunchBounds>
-// int cuda_get_opt_block_size(const CudaInternal* cuda_instance,
-//                             const cudaFuncAttributes& attr,
-//                             const FunctorType& f, const size_t vector_length,
-//                             const size_t shmem_block,
-//                             const size_t shmem_thread) {
-//   (void)cuda_instance;
-
-//   auto const& prop = Kokkos::Cuda().cuda_device_prop();
-
-//   auto const block_size_to_dynamic_shmem = [&f, vector_length, shmem_block,
-//                                             shmem_thread](int block_size) {
-//     size_t const functor_shmem =
-//         Kokkos::Impl::FunctorTeamShmemSize<FunctorType>::value(
-//             f, block_size / vector_length);
-
-//     size_t const dynamic_shmem = shmem_block +
-//                                  shmem_thread * (block_size / vector_length) +
-//                                  functor_shmem;
-//     return dynamic_shmem;
-//   };
-
-//   return cuda_deduce_block_size(false, prop, attr, block_size_to_dynamic_shmem,
-//                                 LaunchBounds{});
-// }
-
 template <class FunctorType, class LaunchBounds,
           template <typename> class Wrapper>
 int sycl_get_opt_block_size(const sycl::queue& q, const FunctorType& f,
@@ -243,7 +168,9 @@ int sycl_get_opt_block_size(const sycl::queue& q, const FunctorType& f,
                             const size_t shmem_block,
                             const size_t shmem_thread) {
 
+  // TODO - cuda equiv here calls:
   // auto const& prop = Kokkos::Cuda().cuda_device_prop();
+  // i.e. device info caching.
 
   auto const block_size_to_dynamic_shmem = [&f, vector_length, shmem_block,
                                             shmem_thread](int block_size) {
@@ -261,40 +188,6 @@ int sycl_get_opt_block_size(const sycl::queue& q, const FunctorType& f,
   return sycl_deduce_block_size<decltype(block_size_to_dynamic_shmem), FunctorType, LaunchBounds, Wrapper>(false, q, f, block_size_to_dynamic_shmem, LaunchBounds{});
 }
 
-// // Assuming cudaFuncSetCacheConfig(MyKernel, cudaFuncCachePreferL1)
-// // NOTE these number can be obtained several ways:
-// // * One option is to download the CUDA Occupancy Calculator spreadsheet, select
-// // "Compute Capability" first and check what is the smallest "Shared Memory
-// // Size Config" that is available.  The "Shared Memory Per Multiprocessor" in
-// // bytes is then to be found below in the summary.
-// // * Another option would be to look for the information in the "Tuning
-// // Guide(s)" of the CUDA Toolkit Documentation for each GPU architecture, in
-// // the "Shared Memory" section (more tedious)
-// inline size_t get_shmem_per_sm_prefer_l1(cudaDeviceProp const& properties) {
-//   int const compute_capability = properties.major * 10 + properties.minor;
-//   return [compute_capability]() {
-//     switch (compute_capability) {
-//       case 30:
-//       case 32:
-//       case 35: return 16;
-//       case 37: return 80;
-//       case 50:
-//       case 53:
-//       case 60:
-//       case 62: return 64;
-//       case 52:
-//       case 61: return 96;
-//       case 70:
-//       case 80:
-//       case 86: return 8;
-//       case 75: return 32;
-//       default:
-//         Kokkos::Impl::throw_runtime_exception(
-//             "Unknown device in cuda block size deduction");
-//     }
-//     return 0;
-//   }() * 1024;
-// }
 }  // namespace Impl
 }  // namespace Kokkos
 
