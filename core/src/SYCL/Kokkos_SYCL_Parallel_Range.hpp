@@ -56,6 +56,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
  public:
   using Policy = Kokkos::RangePolicy<Traits...>;
 
+private :
 
   // TODO should this be defined elsewhere for others to use it?
   // if so, WorkTag needs to be a member
@@ -83,7 +84,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
   };
 
 
-  private : using Member = typename Policy::member_type;
+  using Member = typename Policy::member_type;
   using WorkTag      = typename Policy::work_tag;
   using LaunchBounds = typename Policy::launch_bounds;
 
