@@ -58,7 +58,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
 
 
   // TODO should this be defined elsewhere for others to use it?
-  // TODO if so, WorkTag needs to be a member
+  // if so, WorkTag needs to be a member
   template <typename Functor>
   class RangeRoundedFunctor {
    public:
@@ -105,8 +105,6 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
       const auto begin = policy.begin();
       const auto end   = policy.end();
 
-      // TODO - are we actually computing the wrong num regs here by computing
-      // for the unwrapped kernel?
       auto group_size_select =
           sycl_get_opt_block_size<Functor, LaunchBounds, RangeRoundedFunctor>(
               q, functor, 1, 0, 0);
