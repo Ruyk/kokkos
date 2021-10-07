@@ -581,7 +581,7 @@
     (defined(KOKKOS_COMPILER_INTEL) && defined(_WIN32))
 #define KOKKOS_THREAD_LOCAL __declspec(thread)
 #else
-#define KOKKOS_THREAD_LOCAL __thread
+#define KOKKOS_THREAD_LOCAL
 #endif
 
 #if (defined(KOKKOS_IMPL_WINDOWS_CUDA) || defined(KOKKOS_COMPILER_MSVC)) && \
