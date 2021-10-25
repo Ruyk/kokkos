@@ -110,7 +110,7 @@ private :
 
       auto global_size = policy.end() - policy.begin();
       auto infl_global_size =
-          global_size - (global_size % group_size) + group_size;
+          (global_size + group_size - 1) / group_size;
 
       const sycl::nd_range<1>
           range{sycl::range<1>(infl_global_size), sycl::range<1>(group_size)};
