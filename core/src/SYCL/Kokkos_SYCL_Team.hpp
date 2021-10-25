@@ -111,7 +111,7 @@ class SYCLTeamMember {
   template <class ValueType>
   KOKKOS_INLINE_FUNCTION void team_broadcast(ValueType& val,
                                              const int thread_id) const {
-    val = sycl::ONEAPI::broadcast(m_item.get_group(), val,
+    val = sycl::ext::oneapi::broadcast(m_item.get_group(), val,
                                   sycl::id<2>(thread_id, 0));
   }
 
