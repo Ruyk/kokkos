@@ -258,7 +258,7 @@ class ParallelScanSYCLBase {
         static_cast<pointer_type>(instance.scratch_space(total_memory));
 
     Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem&
-        indirectKernelMem = instance.m_indirectKernelMem;
+        indirectKernelMem = instance.get_indirect_kernel_mem();
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);

@@ -93,7 +93,8 @@ private :
 
   template <typename Functor>
   static sycl::event sycl_direct_launch(const Policy& policy,
-                                        const Functor& functor) {
+                                        const Functor& functor,
+                                        sycl::event memcpy_event) {
     // Convenience references
     const Kokkos::Experimental::SYCL& space = policy.space();
     Kokkos::Experimental::Impl::SYCLInternal& instance =
@@ -102,8 +103,7 @@ private :
 
 #if defined(KOKKOS_ENABLE_SYCL) && defined(KOKKOS_ARCH_AMPERE80)
     // TODO  don't pass queue to itself...
-    auto parallel_for_event = q.submit([functor, policy, q](sycl::handler& cgh) {
-
+    auto parallel_for_event = q.submit([functor, policy, q, memcpy_event](sycl::handler& cgh) {
       auto group_size =
           sycl_get_opt_block_size<Functor, LaunchBounds, RangeRoundedFunctor>(
               q, functor, 1/*vector_length*/, 0/*shmem_block*/, 0/*shmem_thread*/);
@@ -116,15 +116,16 @@ private :
           range{sycl::range<1>(infl_global_size), sycl::range<1>(group_size)};
 
       RangeRoundedFunctor<Functor> fn(policy.begin(), policy.end(), functor);
+      cgh.depends_on(memcpy_event);
       cgh.parallel_for(range, fn);
 
     });
 #else
-    auto parallel_for_event = q.submit([functor, policy](sycl::handler& cgh) {
+    auto parallel_for_event = q.submit([functor, policy, memcpy_event](sycl::handler& cgh) {
       sycl::range<1> range(policy.end() - policy.begin());
       const auto begin = policy.begin();
-
-      cgh.parallel_for(range, [=](sycl::item<1> item) {
+      cgh.depends_on(memcpy_event);
+      cgh.parallel_for(range, memcpy_event, [=](sycl::item<1> item) {
         const typename Policy::index_type id = item.get_linear_id() + begin;
         if constexpr (std::is_same<WorkTag, void>::value)
           functor(id);
@@ -133,7 +134,9 @@ private :
       });
     });
 #endif // defined(KOKKOS_ENABLE_SYCL) && defined(KOKKOS_ARCH_AMPERE80)
-    q.submit_barrier(std::vector<sycl::event>{parallel_for_event});
+    // This barrier would prevent q.memcpy for subsequent kernels from being
+    // brought forward in time.
+    // q.submit_barrier(std::vector<sycl::event>{parallel_for_event});
 
     return parallel_for_event;
   }
@@ -147,12 +150,15 @@ private :
     Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem&
         indirectKernelMem = m_policy.space()
                                 .impl_internal_space_instance()
-                                ->m_indirectKernelMem;
+                                ->get_indirect_kernel_mem();
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
+    // TODO joe: m_copy_event isn't relevant for a trivially copyable kernel
+    // does this matter?
     sycl::event event =
-        sycl_direct_launch(m_policy, functor_wrapper.get_functor());
+        sycl_direct_launch(m_policy, functor_wrapper.get_functor(),
+                           indirectKernelMem.m_copy_event);
     functor_wrapper.register_event(indirectKernelMem, event);
   }
 
@@ -254,7 +260,8 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
   }
 
   template <typename Functor>
-  sycl::event sycl_direct_launch(const Functor& functor) const {
+  sycl::event sycl_direct_launch(const Functor& functor,
+                                 sycl::event memcpy_event) const {
     // Convenience references
     Kokkos::Experimental::Impl::SYCLInternal& instance =
         *m_space.impl_internal_space_instance();
@@ -265,7 +272,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
     const BarePolicy bare_policy(m_policy);
 
     auto parallel_for_event =
-        q.submit([functor, this, bare_policy](sycl::handler& cgh) {
+        q.submit([functor, this, bare_policy, memcpy_event](sycl::handler& cgh) {
           const auto range                  = compute_ranges();
           const sycl::range<3> global_range = range.get_global_range();
           const sycl::range<3> local_range  = range.get_local_range();
@@ -273,6 +280,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
               sycl::range<3>{global_range[2], global_range[1], global_range[0]},
               sycl::range<3>{local_range[2], local_range[1], local_range[0]}};
 
+          cgh.depends_on(memcpy_event);
           cgh.parallel_for(sycl_swapped_range, [functor, bare_policy](
                                                    sycl::nd_item<3> item) {
             // swap back for correct index calculations in DeviceIterateTile
@@ -293,7 +301,9 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
                 .exec_range();
           });
         });
-    q.submit_barrier(std::vector<sycl::event>{parallel_for_event});
+    // This barrier would prevent q.memcpy for subsequent kernels from being
+    // brought forward in time.
+    // q.submit_barrier(std::vector<sycl::event>{parallel_for_event});
 
     return parallel_for_event;
   }
@@ -309,11 +319,11 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
   void execute() const {
     Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem&
         indirectKernelMem =
-            m_space.impl_internal_space_instance()->m_indirectKernelMem;
+            m_space.impl_internal_space_instance()->get_indirect_kernel_mem();
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
-    sycl::event event = sycl_direct_launch(functor_wrapper.get_functor());
+    sycl::event event = sycl_direct_launch(functor_wrapper.get_functor(), indirectKernelMem.m_copy_event);
     functor_wrapper.register_event(indirectKernelMem, event);
   }
 

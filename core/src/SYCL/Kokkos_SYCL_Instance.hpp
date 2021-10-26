@@ -145,12 +145,15 @@ class SYCLInternal {
       fence();
       reserve(sizeof(T));
       if constexpr (sycl::usm::alloc::device == Kind) {
-        sycl::event memcopied =
+        m_copy_event =
             m_q->memcpy(m_data, std::addressof(t), sizeof(T));
-        SYCLInternal::fence(
-            memcopied,
-            "Kokkos::Experimental::SYCLInternal::USMObject fence after copy",
-            m_instance_id);
+        // TODO joe: this change is unlikely to be generally safe
+        // Anything relying on this copy must depend on m_copy_event
+
+        // SYCLInternal::fence(
+        //     memcopied,
+        //     "Kokkos::Experimental::SYCLInternal::USMObject fence after copy",
+        //     m_instance_id);
       } else
         std::memcpy(m_data, std::addressof(t), sizeof(T));
       return *reinterpret_cast<T*>(m_data);
@@ -170,6 +173,8 @@ class SYCLInternal {
              sycl::info::event_command_status::complete);
       m_last_event = event;
     }
+
+    sycl::event m_copy_event; //TODO joe: private + API
 
    private:
     // USMObjectMem class invariants
@@ -193,11 +198,11 @@ class SYCLInternal {
   // An indirect kernel is one where the functor to be executed is explicitly
   // copied to USM memory before being executed, to get around the
   // trivially copyable limitation of SYCL.
-  using IndirectKernelMem = USMObjectMem<sycl::usm::alloc::host>;
-  IndirectKernelMem m_indirectKernelMem;
+  using IndirectKernelMem = USMObjectMem<sycl::usm::alloc::device>;
+  using IndirectReducerMem = USMObjectMem<sycl::usm::alloc::device>;
 
-  using IndirectReducerMem = USMObjectMem<sycl::usm::alloc::host>;
-  IndirectReducerMem m_indirectReducerMem;
+  IndirectKernelMem& get_indirect_kernel_mem();
+  IndirectReducerMem& get_indirect_reducer_mem();
 
   bool was_finalized = false;
 
@@ -219,6 +224,13 @@ class SYCLInternal {
   template <typename WAT>
   static void fence_helper(WAT& wat, const std::string& name,
                            uint32_t instance_id);
+
+  const static size_t usm_pool_size = 30; // TODO joe: arbitrary, should be configurable?
+  std::vector<IndirectKernelMem> m_indirectKernelMem{usm_pool_size};
+  std::vector<IndirectReducerMem> m_indirectReducerMem{usm_pool_size};
+
+  int pool_next = usm_pool_size;
+  int reducer_next = usm_pool_size;
 
  public:
   static void fence(sycl::queue& q, const std::string& name,
