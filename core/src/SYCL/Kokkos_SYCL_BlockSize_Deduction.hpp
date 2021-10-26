@@ -91,9 +91,9 @@ inline int sycl_deduce_block_size(bool early_termination,
   KOKKOS_ASSERT(sycl_device.get_backend() == sycl::backend::cuda);
 
   // Get the compiled kernel to query register & memory usage
-  sycl::kernel_bundle<sycl::bundle_state::executable> kb =
+  static sycl::kernel_bundle<sycl::bundle_state::executable> kb =
     sycl::get_kernel_bundle<sycl::bundle_state::executable>(q.get_context());
-  sycl::kernel k =
+  static sycl::kernel k =
       kb.get_kernel(sycl::get_kernel_id<Wrapper<FunctorType>>());
 
   auto num_regs = k.template get_info<
