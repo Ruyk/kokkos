@@ -125,7 +125,7 @@ private :
       sycl::range<1> range(policy.end() - policy.begin());
       const auto begin = policy.begin();
       cgh.depends_on(memcpy_event);
-      cgh.parallel_for(range, memcpy_event, [=](sycl::item<1> item) {
+      cgh.parallel_for(range, [=](sycl::item<1> item) {
         const typename Policy::index_type id = item.get_linear_id() + begin;
         if constexpr (std::is_same<WorkTag, void>::value)
           functor(id);
