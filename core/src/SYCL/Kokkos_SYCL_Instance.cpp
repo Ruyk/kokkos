@@ -146,6 +146,7 @@ void SYCLInternal::initialize(const sycl::queue& q) {
 
     m_maxShmemPerBlock =
         d.template get_info<sycl::info::device::local_mem_size>();
+#ifndef SYCL_DEVICE_COPYABLE
     for (auto& usm_mem : m_indirectKernelMem){
       usm_mem.reset(*m_queue, m_instance_id);
       usm_mem.reserve(0x1440); // TODO joe: arbitrary (probably too large) size
@@ -154,6 +155,7 @@ void SYCLInternal::initialize(const sycl::queue& q) {
       usm_mem.reset(*m_queue, m_instance_id);
       usm_mem.reserve(0x1440); // TODO joe: arbitrary (probably too large) size
     }
+#endif
 
   } else {
     std::ostringstream msg;
@@ -216,8 +218,10 @@ void SYCLInternal::finalize() {
   m_team_scratch_current_size = 0;
   m_team_scratch_ptr          = nullptr;
 
+#ifndef SYCL_DEVICE_COPYABLE
   for (auto& usm_mem : m_indirectKernelMem) usm_mem.reset();
   for (auto& usm_mem : m_indirectReducerMem) usm_mem.reset();
+#endif
   // guard erasing from all_queues
   {
     std::lock_guard<std::mutex> lock(mutex);
@@ -307,6 +311,7 @@ template void SYCLInternal::fence_helper<sycl::event>(sycl::event&,
                                                       const std::string&,
                                                       uint32_t);
 
+#ifndef SYCL_DEVICE_COPYABLE
 // These 2 functions cycle through a pool of USM allocations for functors
 SYCLInternal::IndirectKernelMem& SYCLInternal::get_indirect_kernel_mem(){
   pool_next = (pool_next + 1) % usm_pool_size;
@@ -355,6 +360,7 @@ void SYCLInternal::USMObjectMem<Kind>::reset() {
 template class SYCLInternal::USMObjectMem<sycl::usm::alloc::shared>;
 template class SYCLInternal::USMObjectMem<sycl::usm::alloc::device>;
 template class SYCLInternal::USMObjectMem<sycl::usm::alloc::host>;
+#endif
 
 }  // namespace Impl
 }  // namespace Experimental

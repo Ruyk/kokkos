@@ -75,7 +75,7 @@ private :
     }
 
     RangeRoundedFunctor(int begin_in, int end_in, Functor functor_in)
-      :  begin(begin_in), end(end_in), functor(functor_in) {}
+      :  begin(begin_in), end(end_in), functor(std::move(functor_in)) {}
 
    private:
     const typename Policy::index_type begin;
@@ -147,19 +147,28 @@ private :
   void execute() const {
     if (m_policy.begin() == m_policy.end()) return;
 
+#ifdef SYCL_DEVICE_COPYABLE
+    struct Dummy {
+    } indirectKernelMem;
+#else
     Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem&
         indirectKernelMem = m_policy.space()
                                 .impl_internal_space_instance()
                                 ->get_indirect_kernel_mem();
+#endif
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
+#ifdef SYCL_DEVICE_COPYABLE
+    sycl_direct_launch(m_policy, functor_wrapper.get_functor());
+#else
     // TODO joe: m_copy_event isn't relevant for a trivially copyable kernel
     // does this matter?
     sycl::event event =
         sycl_direct_launch(m_policy, functor_wrapper.get_functor(),
                            indirectKernelMem.m_copy_event);
     functor_wrapper.register_event(indirectKernelMem, event);
+#endif
   }
 
   ParallelFor(const ParallelFor&) = delete;
@@ -317,14 +326,23 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
   }
 
   void execute() const {
+#iffdef SYCL_DEVICE_COPYABLE
+    struct Dummy {
+    } indirectKernelMem;
+#else
     Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem&
         indirectKernelMem =
             m_space.impl_internal_space_instance()->get_indirect_kernel_mem();
+#endif
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
+#ifdef SYCL_DEVICE_COPYABLE
+    event = sycl_direct_launch(functor_wrapper.get_functor());
+#else
     sycl::event event = sycl_direct_launch(functor_wrapper.get_functor(), indirectKernelMem.m_copy_event);
     functor_wrapper.register_event(indirectKernelMem, event);
+#endif
   }
 
   ParallelFor(const ParallelFor&) = delete;

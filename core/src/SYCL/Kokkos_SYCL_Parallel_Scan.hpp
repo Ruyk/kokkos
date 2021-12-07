@@ -257,14 +257,23 @@ class ParallelScanSYCLBase {
     m_scratch_space =
         static_cast<pointer_type>(instance.scratch_space(total_memory));
 
+#ifdef SYCL_DEVICE_COPYABLE
+    struct Dummy {
+} indirectKernelMem;
+#else
     Kokkos::Experimental::Impl::SYCLInternal::IndirectKernelMem&
         indirectKernelMem = instance.get_indirect_kernel_mem();
+#endif
 
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
 
+#ifdef SYCL_DEVICE_COPYABLE
+    sycl_direct_launch(functor_wrapper.get_functor());
+#else
     sycl::event event = sycl_direct_launch(functor_wrapper.get_functor());
     functor_wrapper.register_event(indirectKernelMem, event);
+#endif
     post_functor();
   }
 
@@ -318,6 +327,7 @@ class ParallelScanWithTotal<FunctorType, Kokkos::RangePolicy<Traits...>,
 
 }  // namespace Impl
 }  // namespace Kokkos
+
 
 #endif
 
