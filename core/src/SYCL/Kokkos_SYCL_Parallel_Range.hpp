@@ -50,19 +50,12 @@
 
 #include <vector>
 
-template <class FunctorType, class... Traits>
-class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
-                                Kokkos::Experimental::SYCL> {
+namespace Kokkos::Impl {
+template <typename Functor, typename Policy>
+class RangeRoundedFunctor {
+  using WorkTag      = typename Policy::work_tag;
+
  public:
-  using Policy = Kokkos::RangePolicy<Traits...>;
-
-private :
-
-  // TODO should this be defined elsewhere for others to use it?
-  // if so, WorkTag needs to be a member
-  template <typename Functor>
-  class RangeRoundedFunctor {
-   public:
     void operator() (sycl::nd_item<1> item) const {
       const typename Policy::index_type id =
           item.get_global_linear_id() + begin;
@@ -74,14 +67,24 @@ private :
       }
     }
 
-    RangeRoundedFunctor(int begin_in, int end_in, Functor functor_in)
-      :  begin(begin_in), end(end_in), functor(std::move(functor_in)) {}
+  RangeRoundedFunctor(int begin_in, int end_in, Functor functor_in)
+    :  begin(begin_in), end(end_in), functor(std::move(functor_in)) {}
 
-   private:
-    const typename Policy::index_type begin;
-    const typename Policy::index_type end;
-    const Functor functor;
-  };
+private:
+   const typename Policy::index_type begin;
+   const typename Policy::index_type end;
+   const Functor functor;
+};
+}       // namespace Kokkos::Impl
+
+template <class FunctorType, class... Traits>
+class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::RangePolicy<Traits...>,
+                                Kokkos::Experimental::SYCL> {
+ public:
+  using Policy = Kokkos::RangePolicy<Traits...>;
+
+private :
+
 
 
   using Member = typename Policy::member_type;
@@ -93,8 +96,7 @@ private :
 
   template <typename Functor>
   static sycl::event sycl_direct_launch(const Policy& policy,
-                                        const Functor& functor,
-                                        sycl::event memcpy_event) {
+                                        const Functor& functor) {
     // Convenience references
     const Kokkos::Experimental::SYCL& space = policy.space();
     Kokkos::Experimental::Impl::SYCLInternal& instance =
@@ -103,9 +105,10 @@ private :
 
 #if defined(KOKKOS_ENABLE_SYCL) && defined(KOKKOS_ARCH_AMPERE80)
     // TODO  don't pass queue to itself...
-    auto parallel_for_event = q.submit([functor, policy, q, memcpy_event](sycl::handler& cgh) {
+    auto parallel_for_event = q.submit([functor, policy, q](sycl::handler& cgh) {
       auto group_size =
-          sycl_get_opt_block_size<Functor, LaunchBounds, RangeRoundedFunctor>(
+          sycl_get_opt_block_size<Functor, LaunchBounds, Policy,
+              RangeRoundedFunctor>(
               q, functor, 1/*vector_length*/, 0/*shmem_block*/, 0/*shmem_thread*/);
 
       auto global_size = policy.end() - policy.begin();
@@ -115,8 +118,9 @@ private :
       const sycl::nd_range<1>
           range{sycl::range<1>(infl_global_size), sycl::range<1>(group_size)};
 
-      RangeRoundedFunctor<Functor> fn(policy.begin(), policy.end(), functor);
-      cgh.depends_on(memcpy_event);
+      RangeRoundedFunctor<Functor,Policy> fn(policy.begin(), policy.end(),
+          functor);
+      //cgh.depends_on(memcpy_event);
       cgh.parallel_for(range, fn);
 
     });
@@ -124,7 +128,7 @@ private :
     auto parallel_for_event = q.submit([functor, policy, memcpy_event](sycl::handler& cgh) {
       sycl::range<1> range(policy.end() - policy.begin());
       const auto begin = policy.begin();
-      cgh.depends_on(memcpy_event);
+      //cgh.depends_on(memcpy_event);
       cgh.parallel_for(range, [=](sycl::item<1> item) {
         const typename Policy::index_type id = item.get_linear_id() + begin;
         if constexpr (std::is_same<WorkTag, void>::value)
@@ -164,9 +168,9 @@ private :
 #else
     // TODO joe: m_copy_event isn't relevant for a trivially copyable kernel
     // does this matter?
+    // Larry let's try without it
     sycl::event event =
-        sycl_direct_launch(m_policy, functor_wrapper.get_functor(),
-                           indirectKernelMem.m_copy_event);
+        sycl_direct_launch(m_policy, functor_wrapper.get_functor())
     functor_wrapper.register_event(indirectKernelMem, event);
 #endif
   }
@@ -326,7 +330,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
   }
 
   void execute() const {
-#iffdef SYCL_DEVICE_COPYABLE
+#ifdef SYCL_DEVICE_COPYABLE
     struct Dummy {
     } indirectKernelMem;
 #else
@@ -338,7 +342,7 @@ class Kokkos::Impl::ParallelFor<FunctorType, Kokkos::MDRangePolicy<Traits...>,
     const auto functor_wrapper = Experimental::Impl::make_sycl_function_wrapper(
         m_functor, indirectKernelMem);
 #ifdef SYCL_DEVICE_COPYABLE
-    event = sycl_direct_launch(functor_wrapper.get_functor());
+    sycl_direct_launch(functor_wrapper.get_functor());
 #else
     sycl::event event = sycl_direct_launch(functor_wrapper.get_functor(), indirectKernelMem.m_copy_event);
     functor_wrapper.register_event(indirectKernelMem, event);

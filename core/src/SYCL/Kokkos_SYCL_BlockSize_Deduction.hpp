@@ -79,7 +79,8 @@ inline int sycl_max_active_blocks_per_sm(int block_size, size_t dynamic_shmem, c
 }
 
 // Implemented for sycl cuda backend only
-template <typename UnaryFunction, typename FunctorType, typename LaunchBounds, template <typename> class Wrapper>
+template <typename UnaryFunction, typename FunctorType, typename LaunchBounds,
+typename Policy, template <typename,typename> class Wrapper>
 inline int sycl_deduce_block_size(bool early_termination,
 				  const sycl::queue& q,
 				  const FunctorType& f,
@@ -94,7 +95,7 @@ inline int sycl_deduce_block_size(bool early_termination,
   static sycl::kernel_bundle<sycl::bundle_state::executable> kb =
     sycl::get_kernel_bundle<sycl::bundle_state::executable>(q.get_context());
   static sycl::kernel k =
-      kb.get_kernel(sycl::get_kernel_id<Wrapper<FunctorType>>());
+      kb.get_kernel(sycl::get_kernel_id<Wrapper<FunctorType,Policy>>());
 
   auto num_regs = k.template get_info<
       sycl::info::kernel_device_specific::ext_codeplay_num_regs>(sycl_device);
@@ -158,7 +159,8 @@ inline int sycl_deduce_block_size(bool early_termination,
 }
 
 template <class FunctorType, class LaunchBounds,
-          template <typename> class Wrapper>
+          class Policy,
+          template <typename,typename> class Wrapper>
 int sycl_get_opt_block_size(const sycl::queue& q, const FunctorType& f,
                             const size_t vector_length,
                             const size_t shmem_block,
@@ -185,7 +187,7 @@ int sycl_get_opt_block_size(const sycl::queue& q, const FunctorType& f,
   };
 
 
-  return sycl_deduce_block_size<decltype(block_size_to_dynamic_shmem), FunctorType, LaunchBounds, Wrapper>(false, q, f, block_size_to_dynamic_shmem, LaunchBounds{});
+  return sycl_deduce_block_size<decltype(block_size_to_dynamic_shmem), FunctorType, LaunchBounds, Policy, Wrapper>(false, q, f, block_size_to_dynamic_shmem, LaunchBounds{});
 }
 
 }  // namespace Impl

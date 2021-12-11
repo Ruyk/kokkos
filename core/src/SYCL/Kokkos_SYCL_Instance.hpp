@@ -204,7 +204,7 @@ class SYCLInternal {
 
   IndirectKernelMem& get_indirect_kernel_mem();
   IndirectReducerMem& get_indirect_reducer_mem();
-#endif
+#endif  // SYCL_DEVICE_COPYABLE
 
   bool was_finalized = false;
 
@@ -227,12 +227,15 @@ class SYCLInternal {
   static void fence_helper(WAT& wat, const std::string& name,
                            uint32_t instance_id);
 
+
+#ifndef SYCL_DEVICE_COPYABLE
   const static size_t usm_pool_size = 30; // TODO joe: arbitrary, should be configurable?
   std::vector<IndirectKernelMem> m_indirectKernelMem{usm_pool_size};
   std::vector<IndirectReducerMem> m_indirectReducerMem{usm_pool_size};
 
   int pool_next = usm_pool_size;
   int reducer_next = usm_pool_size;
+#endif
 
  public:
   static void fence(sycl::queue& q, const std::string& name,
@@ -289,6 +292,7 @@ class SYCLFunctionWrapper<Functor, Storage, false> {
 };
 #endif
 
+
 template <typename Functor, typename Storage>
 auto make_sycl_function_wrapper(const Functor& functor, Storage& storage) {
   return SYCLFunctionWrapper<Functor, Storage>(functor, storage);
@@ -296,4 +300,12 @@ auto make_sycl_function_wrapper(const Functor& functor, Storage& storage) {
 }  // namespace Impl
 }  // namespace Experimental
 }  // namespace Kokkos
+
+#ifdef SYCL_DEVICE_COPYABLE
+template <typename Functor, typename Storage>
+struct sycl::is_device_copyable<
+    const Kokkos::Experimental::Impl::SYCLFunctionWrapper<Functor,Storage>>
+    : std::true_type {};
+#endif
+
 #endif
